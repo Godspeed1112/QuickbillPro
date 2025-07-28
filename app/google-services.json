@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "110392967342",
+    "project_id": "my-invoice-prints",
+    "storage_bucket": "my-invoice-prints.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:110392967342:android:612875b40c00950c51ed3f",
+        "android_client_info": {
+          "package_name": "com.divedigital.invoice"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDEe7A-Vwkf44PrqCIUKqyuTCb_xfHqtdU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

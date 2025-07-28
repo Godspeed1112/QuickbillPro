@@ -1,0 +1,228 @@
+// components/styles/MainAppStyles.js
+import { StyleSheet } from 'react-native';
+
+export const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#1e40af',
+  },
+  scrollContainer: {
+    padding: 16,
+  },
+  header: {
+    backgroundColor: '#2563eb',
+    padding: 24,
+    borderRadius: 8,
+    marginBottom: 24,
+  },
+  headerTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  headerText: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: 'white',
+    marginLeft: 12,
+  },
+  headerSubtext: {
+    fontSize: 16,
+    color: '#bfdbfe',
+  },
+  section: {
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 24,
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitleText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginLeft: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  radioButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 20,
+    marginBottom: 8,
+  },
+  radioText: {
+    marginLeft: 8,
+    fontSize: 16,
+    color: '#374151',
+  },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 12,
+  },
+  itemDescription: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 12,
+  },
+  itemQuantity: {
+    width: 40,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 12,
+  },
+  itemPrice: {
+    width: 40,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 12,
+  },
+  itemTotal: {
+    width: 80,
+    textAlign: 'right',
+    fontWeight: '500',
+  },
+  addButton: {
+    backgroundColor: '#2563eb',
+    padding: 16,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+  },
+  addButtonText: {
+    color: 'white',
+    fontWeight: '500',
+    marginLeft: 8,
+  },
+  totalsContainer: {
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    paddingTop: 16,
+    marginTop: 16,
+  },
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  totalText: {
+    fontSize: 16,
+  },
+  totalAmount: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  grandTotal: {
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    paddingTop: 8,
+  },
+  textarea: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  actionsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 24,
+  },
+  actionButton: {
+    flex: 1,
+    minWidth: 120,
+    padding: 16,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionButtonText: {
+    color: 'white',
+    fontWeight: '500',
+    marginLeft: 8,
+  },
+  resetButton: {
+    backgroundColor: '#4b5563',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 100,
+  },
+  resetButtonText: {
+    color: 'white',
+    fontWeight: '500',
+  },
+  bottomTabBar: {
+    position: 'relative',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fdfdfdff',
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#010635ff',
+    paddingBottom: 10,
+    paddingTop: 5,
+  },
+  bottomTab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  bottomTabText: {
+    fontSize: 12,
+    marginTop: 4,
+    color: '#6b7280',
+  },
+  activeBottomTabText: {
+    color: '#2563eb',
+    fontWeight: '500',
+  },
+  invoiceItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  invoiceTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  invoiceDate: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 4,
+  },
+});
+// Add this to your MainAppStyles.js file

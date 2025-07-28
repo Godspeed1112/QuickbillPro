@@ -1,0 +1,78 @@
+{
+  "expo": {
+    "name": "QuickBillPro",
+    "slug": "divedigital-quickbillpro",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "assets/fire.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "assets/fire.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#005c57"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "assets/fire.png",
+        "backgroundColor": "#005c57"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.divedigital.QuickBillPro"
+    },
+    "web": {
+      "favicon": "assets/icon2.png"
+    },
+    "experiments": {
+      "tsconfigPaths": true
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow access to camera for capturing business logos and signatures."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow access to photo library to select images.",
+          "savePhotosPermission": "Allow saving captured images to photo library."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow access to your camera to take invoice logos or signatures.",
+          "photosPermission": "Allow access to your gallery for invoice images."
+        }
+      ],
+      "expo-router",
+      "expo-sqlite"
+    ],
+    "main": "expo-router/entry",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/8b783cca-6d85-4ba6-8303-4dfb4372d71a"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "b38208ba-8120-4af5-8e48-705a2327018f"
+      }
+    },
+    "owner": "digitaldive"
+  }
+}

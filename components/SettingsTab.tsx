@@ -1,0 +1,834 @@
+// components/SettingsTab.tsx - ENHANCED UI VERSION
+import React, { useState, useEffect, useCallback } from 'react';
+import { View,Text,Switch,TouchableOpacity,ScrollView,TextInput,
+Alert,
+  Animated,
+  Dimensions
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const { width } = Dimensions.get('window');
+
+// Currency options
+const CURRENCIES = [
+  { code: 'GHC', symbol: '₵', name: 'Ghana Cedi' },
+  { code: 'USD', symbol: '$', name: 'US Dollar' },
+  { code: 'EUR', symbol: '€', name: 'Euro' },
+  { code: 'GBP', symbol: '£', name: 'British Pound' },
+  { code: 'NGN', symbol: '₦', name: 'Nigerian Naira' },
+  { code: 'ZAR', symbol: 'R', name: 'South African Rand' }
+];
+
+const SettingsTab = ({ 
+  currency, 
+  setCurrency, 
+  showToast, 
+  appSettings, 
+  onSettingsUpdate 
+}) => {
+  // Local state for form inputs to prevent constant updates
+  const [localSettings, setLocalSettings] = useState({
+    companyName: '',
+    companyEmail: '',
+    defaultTaxRate: '10',
+    ...appSettings
+  });
+  
+  const [isSaving, setIsSaving] = useState(false);
+  const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
+  const [fadeAnim] = useState(new Animated.Value(0));
+
+  // Initialize local settings from props - ONLY run when appSettings actually changes
+  useEffect(() => {
+    if (appSettings && Object.keys(appSettings).length > 0) {
+      setLocalSettings(prevLocal => ({
+        ...prevLocal,
+        ...appSettings
+      }));
+    }
+  }, [appSettings.companyName, appSettings.companyEmail, appSettings.defaultTaxRate, appSettings.darkMode, appSettings.autoSave, appSettings.notifications, appSettings.autoBackup]);
+
+  // Fade in animation
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  // Memoized save function to prevent recreation on every render
+  const saveSettings = useCallback(async (settingsToSave) => {
+    if (isSaving) return; // Prevent multiple saves
+    
+    setIsSaving(true);
+    try {
+      await AsyncStorage.setItem('@app_settings', JSON.stringify(settingsToSave));
+      onSettingsUpdate(settingsToSave);
+      showToast('Settings saved successfully', 'success');
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      showToast('Failed to save settings', 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [isSaving, onSettingsUpdate, showToast]);
+
+  // Handle individual setting changes
+  const handleSettingChange = useCallback((key, value) => {
+    setLocalSettings(prev => {
+      const newSettings = { ...prev, [key]: value };
+      
+      // Auto-save for switches and immediate changes
+      if (typeof value === 'boolean') {
+        saveSettings(newSettings);
+      }
+      
+      return newSettings;
+    });
+  }, [saveSettings]);
+
+  // Handle text input changes (with debouncing for auto-save)
+  const handleTextChange = useCallback((key, value) => {
+    setLocalSettings(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  // Manual save for text inputs
+  const handleManualSave = useCallback(() => {
+    saveSettings(localSettings);
+  }, [localSettings, saveSettings]);
+
+  // Currency selection
+  const handleCurrencySelect = useCallback((currencyCode) => {
+    setCurrency(currencyCode);
+    setLocalSettings(prev => ({ ...prev, currency: currencyCode }));
+    setShowCurrencyPicker(false);
+    
+    // Save currency change immediately
+    const updatedSettings = { ...localSettings, currency: currencyCode };
+    saveSettings(updatedSettings);
+  }, [setCurrency, localSettings, saveSettings]);
+
+  // Reset settings
+  const handleResetSettings = useCallback(() => {
+    Alert.alert(
+      'Reset Settings',
+      'Are you sure you want to reset all settings to default?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            const defaultSettings = {
+              currency: 'GHC',
+              darkMode: false,
+              autoSave: true,
+              defaultTaxRate: '10',
+              companyName: '',
+              companyEmail: '',
+              notifications: true,
+              autoBackup: false
+            };
+            setLocalSettings(defaultSettings);
+            saveSettings(defaultSettings);
+          }
+        }
+      ]
+    );
+  }, [saveSettings]);
+
+  const currentStyles = localSettings.darkMode ? { ...styles, ...darkStyles } : styles;
+  const selectedCurrency = CURRENCIES.find(c => c.code === localSettings.currency) || CURRENCIES[0];
+
+  return (
+    <Animated.View style={[currentStyles.container, { opacity: fadeAnim }]}>
+      <ScrollView 
+        style={currentStyles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 30 }}
+      >
+        {/* Enhanced Header */}
+        <View style={currentStyles.header}>
+          <View style={currentStyles.headerTitle}>
+            <Feather name="settings" size={28} color="white" />
+            <Text style={currentStyles.headerText}>Settings</Text>
+          </View>
+          <Text style={currentStyles.headerSubtext}>Customize your app preferences</Text>
+        </View>
+
+        {/* Company Information Card */}
+        <View style={currentStyles.section}>
+          <Text style={currentStyles.sectionTitleText}>Company Information</Text>
+          
+          <View style={currentStyles.inputGroup}>
+            <Text style={currentStyles.label}>Company Name</Text>
+            <View style={currentStyles.inputContainer}>
+              <Feather name="home" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} style={currentStyles.inputIcon} />
+              <TextInput
+                style={currentStyles.input}
+                value={localSettings.companyName}
+                onChangeText={(text) => handleTextChange('companyName', text)}
+                placeholder="Enter your company name"
+                placeholderTextColor={localSettings.darkMode ? '#9CA3AF' : '#6B7280'}
+              />
+            </View>
+          </View>
+
+          <View style={currentStyles.inputGroup}>
+            <Text style={currentStyles.label}>Company Email</Text>
+            <View style={currentStyles.inputContainer}>
+              <Feather name="mail" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} style={currentStyles.inputIcon} />
+              <TextInput
+                style={currentStyles.input}
+                value={localSettings.companyEmail}
+                onChangeText={(text) => handleTextChange('companyEmail', text)}
+                placeholder="Enter your company email"
+                placeholderTextColor={localSettings.darkMode ? '#9CA3AF' : '#6B7280'}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+          </View>
+
+          <View style={currentStyles.inputGroup}>
+            <Text style={currentStyles.label}>Default Tax Rate (%)</Text>
+            <View style={currentStyles.inputContainer}>
+              <Feather name="percent" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} style={currentStyles.inputIcon} />
+              <TextInput
+                style={currentStyles.input}
+                value={localSettings.defaultTaxRate}
+                onChangeText={(text) => handleTextChange('defaultTaxRate', text)}
+                placeholder="10"
+                placeholderTextColor={localSettings.darkMode ? '#9CA3AF' : '#6B7280'}
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[currentStyles.saveButton, { opacity: isSaving ? 0.7 : 1 }]}
+            onPress={handleManualSave}
+            disabled={isSaving}
+            activeOpacity={0.8}
+          >
+            <Feather name={isSaving ? "loader" : "save"} size={16} color="white" />
+            <Text style={currentStyles.saveButtonText}>
+              {isSaving ? 'Saving...' : 'Save Company Info'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* App Preferences Card */}
+        <View style={currentStyles.section}>
+          <Text style={currentStyles.sectionTitleText}>App Preferences</Text>
+
+          {/* Currency Selection */}
+          <View style={currentStyles.settingItem}>
+            <View style={currentStyles.settingInfo}>
+              <View style={currentStyles.settingIconContainer}>
+                <Feather name="dollar-sign" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} />
+              </View>
+              <View>
+                <Text style={currentStyles.settingLabel}>Currency</Text>
+                <Text style={currentStyles.settingDescription}>Choose your preferred currency</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={currentStyles.currencyButton}
+              onPress={() => setShowCurrencyPicker(!showCurrencyPicker)}
+              activeOpacity={0.7}
+            >
+              <Text style={currentStyles.currencyText}>
+                {selectedCurrency.symbol} {selectedCurrency.code}
+              </Text>
+              <Feather 
+                name={showCurrencyPicker ? "chevron-up" : "chevron-down"} 
+                size={18} 
+                color={localSettings.darkMode ? '#F3F4F6' : '#374151'} 
+              />
+            </TouchableOpacity>
+          </View>
+
+          {showCurrencyPicker && (
+            <View style={currentStyles.currencyList}>
+              {CURRENCIES.map((curr, index) => (
+                <TouchableOpacity
+                  key={curr.code}
+                  style={[
+                    currentStyles.currencyOption,
+                    curr.code === localSettings.currency && currentStyles.selectedCurrency,
+                    index === CURRENCIES.length - 1 && { borderBottomWidth: 0 }
+                  ]}
+                  onPress={() => handleCurrencySelect(curr.code)}
+                  activeOpacity={0.7}
+                >
+                  <View style={currentStyles.currencyOptionLeft}>
+                    <Text style={currentStyles.currencySymbol}>{curr.symbol}</Text>
+                    <View>
+                      <Text style={currentStyles.currencyName}>{curr.name}</Text>
+                      <Text style={currentStyles.currencyCode}>{curr.code}</Text>
+                    </View>
+                  </View>
+                  {curr.code === localSettings.currency && (
+                    <View style={currentStyles.checkContainer}>
+                      <Feather name="check" size={18} color="#2563EB" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {/* Toggle Settings */}
+          {[
+            { key: 'darkMode', label: 'Dark Mode', description: 'Enable dark theme', icon: 'moon' },
+            { key: 'autoSave', label: 'Auto Save', description: 'Automatically save changes', icon: 'save' },
+            { key: 'notifications', label: 'Notifications', description: 'Receive app notifications', icon: 'bell' },
+            { key: 'autoBackup', label: 'Auto Backup', description: 'Automatic data backup', icon: 'cloud' }
+          ].map((setting, index) => (
+            <View key={setting.key} style={currentStyles.settingItem}>
+              <View style={currentStyles.settingInfo}>
+                <View style={currentStyles.settingIconContainer}>
+                  <Feather name={setting.icon} size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} />
+                </View>
+                <View style={currentStyles.settingTextContainer}>
+                  <Text style={currentStyles.settingLabel}>{setting.label}</Text>
+                  <Text style={currentStyles.settingDescription}>{setting.description}</Text>
+                </View>
+              </View>
+              <Switch
+                value={localSettings[setting.key]}
+                onValueChange={(value) => handleSettingChange(setting.key, value)}
+                trackColor={{ false: localSettings.darkMode ? '#4B5563' : '#D1D5DB', true: '#2563EB' }}
+                thumbColor={localSettings[setting.key] ? '#FFFFFF' : (localSettings.darkMode ? '#9CA3AF' : '#F3F4F6')}
+                ios_backgroundColor={localSettings.darkMode ? '#4B5563' : '#D1D5DB'}
+              />
+            </View>
+          ))}
+        </View>
+
+        {/* Actions Card */}
+        <View style={currentStyles.section}>
+          <Text style={currentStyles.sectionTitleText}>Actions</Text>
+          
+          <TouchableOpacity
+            style={currentStyles.resetButton}
+            onPress={handleResetSettings}
+            activeOpacity={0.8}
+          >
+            <Feather name="refresh-cw" size={16} color="white" />
+            <Text style={currentStyles.resetButtonText}>Reset to Defaults</Text>
+          </TouchableOpacity>
+          
+          <Text style={currentStyles.warningText}>
+            This will reset all settings to their default values. This action cannot be undone.
+          </Text>
+        </View>
+
+        {/* App Information Card */}
+        <View style={currentStyles.section}>
+          <Text style={currentStyles.sectionTitleText}>App Information</Text>
+          <View style={currentStyles.appInfoContainer}>
+            <View style={currentStyles.appIconContainer}>
+              <Feather name="smartphone" size={32} color="#2563EB" />
+            </View>
+            
+            <View style={currentStyles.appInfoContent}>
+              <View style={currentStyles.appInfoRow}>
+                <Text style={currentStyles.appInfoLabel}>QuickbillPro</Text>
+                <Text style={currentStyles.appInfoValue}>V 1.0.0 (Beta)</Text>
+              </View>
+              
+              <View style={currentStyles.appInfoRow}>
+                <Text style={currentStyles.appInfoLabel}>Build Date</Text>
+                <Text style={currentStyles.appInfoValue}>July 2025</Text>
+              </View>
+              
+              <View style={currentStyles.appInfoRow}>
+                <Text style={currentStyles.appInfoLabel}>Status</Text>
+                <View style={currentStyles.statusContainer}>
+                  <View style={currentStyles.statusDot} />
+                  <Text style={currentStyles.statusText}>In Development</Text>
+                </View>
+              </View>
+            </View>
+          </View>
+          
+          <View style={currentStyles.betaNoticeContainer}>
+            <View style={currentStyles.betaNoticeHeader}>
+              <Feather name="alert-triangle" size={16} color="#F59E0B" />
+              <Text style={currentStyles.betaNoticeTitle}>Beta Version Notice</Text>
+            </View>
+            <Text style={currentStyles.betaNoticeText}>
+              This app is currently in active development. Some features may be unstable or incomplete. 
+              We appreciate your feedback as we work to improve the experience.
+              @divedigital--233508341097
+            </Text>
+          </View>
+        </View>
+      </ScrollView>
+    </Animated.View>
+  );
+};
+
+// Enhanced Styles
+const styles = {
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  scrollContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  section: {
+    backgroundColor: 'white',
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  sectionTitleText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 16,
+  },
+  headerTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  header: {
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  headerIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  headerTextContainer: {
+    flex: 1,
+  },
+  headerTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  headerText: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: 'white',
+    marginLeft: 12,
+  },
+  headerSubtext: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '400',
+  },
+  card: {
+    backgroundColor: 'white',
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  cardIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EBF4FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  cardTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 16,
+    height: 52,
+  },
+  inputIcon: {
+    marginRight: 12,
+  },
+  input: {
+    flex: 1,
+    fontSize: 16,
+    color: '#374151',
+    height: '100%',
+  },
+  saveButton: {
+    backgroundColor: '#059669',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginTop: 8,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  saveButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  resetButton: {
+    backgroundColor: '#DC2626',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  resetButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  settingItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  settingInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  settingIconContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  settingTextContainer: {
+    flex: 1,
+  },
+  settingLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 2,
+  },
+  settingDescription: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  currencyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  currencyText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    marginRight: 8,
+  },
+  currencyList: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    marginTop: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  currencyOption: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  currencyOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  currencySymbol: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2563EB',
+    width: 32,
+    textAlign: 'center',
+    marginRight: 12,
+  },
+  currencyName: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#374151',
+  },
+  currencyCode: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  selectedCurrency: {
+    backgroundColor: '#EBF4FF',
+  },
+  checkContainer: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'white',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#2563EB',
+  },
+  dangerButton: {
+    backgroundColor: '#DC2626',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  dangerButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  warningText: {
+    fontSize: 13,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginTop: 12,
+    fontStyle: 'italic',
+  },
+  appInfoContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 20,
+  },
+  appIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#EBF4FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  appInfoContent: {
+    flex: 1,
+  },
+  appInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  appInfoLabel: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  appInfoValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#F59E0B',
+    marginRight: 6,
+  },
+  statusText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#F59E0B',
+  },
+  betaNoticeContainer: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    padding: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#F59E0B',
+  },
+  betaNoticeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  betaNoticeTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#92400E',
+    marginLeft: 8,
+  },
+  betaNoticeText: {
+    fontSize: 14,
+    color: '#78350F',
+    lineHeight: 20,
+  },
+};
+
+const darkStyles = {
+  container: {
+    backgroundColor: '#0F172A',
+  },
+  scrollContainer: {
+    backgroundColor: '#0F172A',
+  },
+  section: {
+    backgroundColor: '#1E293B',
+    borderColor: '#334155',
+    borderWidth: 1,
+  },
+  sectionTitleText: {
+    color: '#F1F5F9',
+  },
+  header: {
+    backgroundColor: '#1E293B',
+  },
+  card: {
+    backgroundColor: '#1E293B',
+    borderColor: '#334155',
+    borderWidth: 1,
+  },
+  cardTitle: {
+    color: '#F1F5F9',
+  },
+  label: {
+    color: '#F1F5F9',
+  },
+  inputContainer: {
+    backgroundColor: '#334155',
+    borderColor: '#475569',
+  },
+  input: {
+    color: '#F1F5F9',
+  },
+  settingLabel: {
+    color: '#F1F5F9',
+  },
+  settingDescription: {
+    color: '#94A3B8',
+  },
+  settingItem: {
+    borderBottomColor: '#334155',
+  },
+  settingIconContainer: {
+    backgroundColor: '#334155',
+  },
+  currencyButton: {
+    backgroundColor: '#334155',
+    borderColor: '#475569',
+  },
+  currencyText: {
+    color: '#F1F5F9',
+  },
+  currencyList: {
+    backgroundColor: '#334155',
+    borderColor: '#475569',
+  },
+  currencyOption: {
+    borderBottomColor: '#475569',
+  },
+  currencyName: {
+    color: '#F1F5F9',
+  },
+  currencyCode: {
+    color: '#94A3B8',
+  },
+  selectedCurrency: {
+    backgroundColor: '#1E40AF',
+  },
+  checkContainer: {
+    backgroundColor: '#334155',
+  },
+  warningText: {
+    color: '#94A3B8',
+  },
+};
+
+export default SettingsTab;
