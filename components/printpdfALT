@@ -1,0 +1,1789 @@
+// components/printPdf.js
+import React, { useState, useCallback, useMemo, useRef } from 'react';
+import {
+  View,
+  Text,
+  Modal,
+  TouchableOpacity,
+  ScrollView,
+  Alert,
+  Share,
+  Linking,
+  Image,
+  Dimensions,
+  ActivityIndicator,
+  Platform,
+  SafeAreaView
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+
+const { width } = Dimensions.get('window');
+
+// Custom Error Classes
+class PDFGenerationError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.name = 'PDFGenerationError';
+    this.code = code;
+  }
+}
+
+class ImageProcessingError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.name = 'ImageProcessingError';
+    this.code = code;
+  }
+}
+
+// Configuration
+const PDF_CONFIG = {
+  maxImageSize: 5 * 1024 * 1024, // 5MB
+  supportedImageTypes: ['png', 'jpg', 'jpeg'],
+  defaultTimeout: 30000, // 30 seconds
+  cacheExpiry: 5 * 60 * 1000, // 5 minutes
+};
+
+// Additional Utility Functions and Hooks
+
+// Custom hook for PDF operations
+export const usePDFOperations = (invoiceData, options = {}) => {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [pdfUri, setPdfUri] = useState(null);
+  const [error, setError] = useState(null);
+
+  const generatePDF = useCallback(async () => {
+    try {
+      setIsGenerating(true);
+      setError(null);
+      setProgress(0);
+
+      const uri = await generateInvoicePdf(invoiceData, {
+        ...options,
+        onProgress: setProgress
+      });
+
+      setPdfUri(uri);
+      return uri;
+    } catch (err) {
+      setError(err);
+      throw err;
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [invoiceData, options]);
+
+  const reset = useCallback(() => {
+    setIsGenerating(false);
+    setProgress(0);
+    setPdfUri(null);
+    setError(null);
+  }, []);
+
+  return {
+    generatePDF,
+    isGenerating,
+    progress,
+    pdfUri,
+    error,
+    reset
+  };
+};
+
+// PDF Quality and Size Optimization
+export const optimizePDFSettings = (invoiceData) => {
+  const itemCount = invoiceData.items?.length || 0;
+  const hasImages = !!(invoiceData.businessLogo || invoiceData.customerSignature);
+  
+  // Adjust settings based on content complexity
+  if (itemCount > 50 || hasImages) {
+    return {
+      width: 595,
+      height: 842,
+      quality: 0.8, // Slightly lower quality for large documents
+      margins: { top: 20, bottom: 20, left: 20, right: 20 }
+    };
+  }
+  
+  return {
+    width: 595,
+    height: 842,
+    quality: 1.0, // High quality for simple documents
+    margins: { top: 15, bottom: 15, left: 15, right: 15 }
+  };
+};
+
+// PDF Validation Utilities
+export const validateInvoiceData = (invoiceData) => {
+  const errors = [];
+  
+  if (!invoiceData) {
+    errors.push('Invoice data is required');
+    return { isValid: false, errors };
+  }
+  
+  // Required fields validation
+  if (!invoiceData.invoiceNumber) {
+    errors.push('Invoice number is required');
+  }
+  
+  if (!invoiceData.date) {
+    errors.push('Invoice date is required');
+  }
+  
+  if (!invoiceData.businessInfo?.name) {
+    errors.push('Business name is required');
+  }
+  
+  if (!invoiceData.customerInfo?.name) {
+    errors.push('Customer name is required');
+  }
+  
+  if (!invoiceData.items || invoiceData.items.length === 0) {
+    errors.push('At least one item is required');
+  } else {
+    // Validate items
+    invoiceData.items.forEach((item, index) => {
+      if (!item.description) {
+        errors.push(`Item ${index + 1}: Description is required`);
+      }
+      if (!item.quantity || parseFloat(item.quantity) <= 0) {
+        errors.push(`Item ${index + 1}: Valid quantity is required`);
+      }
+      if (!item.price || parseFloat(item.price) < 0) {
+        errors.push(`Item ${index + 1}: Valid price is required`);
+      }
+    });
+  }
+  
+  // Numeric field validation
+  if (invoiceData.TaxRate && (isNaN(invoiceData.TaxRate) || invoiceData.TaxRate < 0)) {
+    errors.push('Tax rate must be a valid positive number');
+  }
+  
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+};
+
+// Performance Monitoring
+export const PDFPerformanceMonitor = {
+  startTime: null,
+  
+  start() {
+    this.startTime = Date.now();
+  },
+  
+  end(operation) {
+    if (this.startTime) {
+      const duration = Date.now() - this.startTime;
+      console.log(`PDF ${operation} completed in ${duration}ms`);
+      this.startTime = null;
+      return duration;
+    }
+    return null;
+  },
+  
+  measure(operation, fn) {
+    return async (...args) => {
+      this.start();
+      try {
+        const result = await fn(...args);
+        this.end(operation);
+        return result;
+      } catch (error) {
+        this.end(`${operation} (failed)`);
+        throw error;
+      }
+    };
+  }
+};
+
+// Enhanced Error Reporting
+export const reportPDFError = (error, context = {}) => {
+  const errorReport = {
+    timestamp: new Date().toISOString(),
+    error: {
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    },
+    context: {
+      platform: Platform.OS,
+      version: Platform.Version,
+      ...context
+    }
+  };
+  
+  console.error('PDF Error Report:', errorReport);
+  
+  // In a production app, you might want to send this to an error reporting service
+  // Example: crashlytics.recordError(error);
+  
+  return errorReport;
+};
+
+// PDF Template Manager
+export const PDFTemplateManager = {
+  templates: INVOICE_TEMPLATES,
+  
+  getTemplate(templateName) {
+    return this.templates[templateName] || this.templates.modern;
+  },
+  
+  addTemplate(name, template) {
+    this.templates[name] = {
+      primaryColor: '#2563eb',
+      fontFamily: 'Arial, Helvetica, sans-serif',
+      accentColor: '#f7fafc',
+      ...template
+    };
+  },
+  
+  removeTemplate(name) {
+    if (name !== 'modern' && name !== 'minimal' && name !== 'classic') {
+      delete this.templates[name];
+      return true;
+    }
+    return false;
+  },
+  
+  listTemplates() {
+    return Object.keys(this.templates);
+  }
+};
+
+// PDF Batch Processing
+export class PDFBatchProcessor {
+  constructor(options = {}) {
+    this.concurrency = options.concurrency || 3;
+    this.onProgress = options.onProgress || (() => {});
+    this.onItemComplete = options.onItemComplete || (() => {});
+    this.onError = options.onError || (() => {});
+  }
+  
+  async processBatch(invoiceDataArray, pdfOptions = {}) {
+    const results = [];
+    const total = invoiceDataArray.length;
+    let completed = 0;
+    
+    // Process in chunks to manage memory
+    const chunks = this.chunkArray(invoiceDataArray, this.concurrency);
+    
+    for (const chunk of chunks) {
+      const chunkPromises = chunk.map(async (invoiceData, index) => {
+        try {
+          const uri = await generateInvoicePdf(invoiceData, {
+            ...pdfOptions,
+            onProgress: (progress) => {
+              // Individual item progress can be tracked here
+            }
+          });
+          
+          completed++;
+          this.onProgress((completed / total) * 100);
+          this.onItemComplete({ success: true, uri, invoiceData });
+          
+          return { success: true, uri, invoiceData };
+          
+        } catch (error) {
+          completed++;
+          this.onProgress((completed / total) * 100);
+          this.onError(error, invoiceData);
+          
+          return { success: false, error, invoiceData };
+        }
+      });
+      
+      const chunkResults = await Promise.all(chunkPromises);
+      results.push(...chunkResults);
+    }
+    
+    return results;
+  }
+  
+  chunkArray(array, chunkSize) {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += chunkSize) {
+      chunks.push(array.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+}
+
+// Export all enhancements
+export {
+  PDFGenerationError,
+  ImageProcessingError,
+  sanitizeText,
+  validateImageUri,
+  generateUniqueFilename,
+  convertImageToBase64,
+  generateHtmlContent,
+  PDF_CONFIG,
+  INVOICE_TEMPLATES
+};
+
+const INVOICE_TEMPLATES = {
+  modern: {
+    primaryColor: '#2563eb',
+    fontFamily: 'Arial, Helvetica, sans-serif',
+    accentColor: '#f7fafc'
+  },
+  minimal: {
+    primaryColor: '#374151',
+    fontFamily: 'Helvetica, Arial, sans-serif',
+    accentColor: '#f9fafb'
+  },
+  classic: {
+    primaryColor: '#059669',
+    fontFamily: 'Times, serif',
+    accentColor: '#f0fdf4'
+  }
+};
+
+// Utility Functions
+const sanitizeText = (text) => {
+  if (!text) return '';
+  return text
+    .toString()
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/&/g, '&amp;');
+};
+
+const validateImageUri = (uri) => {
+  if (!uri) return false;
+  const validProtocols = ['file://', 'data:', 'content://', 'asset://'];
+  const hasValidProtocol = validProtocols.some(protocol => uri.startsWith(protocol));
+  
+  if (uri.startsWith('data:image/')) {
+    return true;
+  }
+  
+  const extension = uri.toLowerCase().split('.').pop();
+  return hasValidProtocol && PDF_CONFIG.supportedImageTypes.includes(extension);
+};
+
+const generateUniqueFilename = (invoiceData, extension = 'pdf') => {
+  const timestamp = Date.now();
+  const sanitizedNumber = invoiceData.invoiceNumber?.replace(/[^a-zA-Z0-9]/g, '_') || 'invoice';
+  return `${invoiceData.documentType}_${sanitizedNumber}_${timestamp}.${extension}`;
+};
+
+// Enhanced Image Conversion with Validation
+const convertImageToBase64 = async (imageUri, onProgress) => {
+  if (!imageUri) return null;
+  
+  try {
+    onProgress?.(10);
+    
+    if (!validateImageUri(imageUri)) {
+      throw new ImageProcessingError('Invalid image URI', 'INVALID_URI');
+    }
+    
+    onProgress?.(30);
+    
+    // Check if it's already a base64 string
+    if (imageUri.startsWith('data:image/')) {
+      onProgress?.(100);
+      return imageUri;
+    }
+    
+    onProgress?.(50);
+    
+    // Check file size (if possible)
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(imageUri);
+      if (fileInfo.exists && fileInfo.size > PDF_CONFIG.maxImageSize) {
+        throw new ImageProcessingError('Image file too large', 'FILE_TOO_LARGE');
+      }
+    } catch (error) {
+      console.warn('Could not check file size:', error);
+    }
+    
+    onProgress?.(70);
+    
+    // Convert file URI to base64
+    const base64 = await FileSystem.readAsStringAsync(imageUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    
+    onProgress?.(90);
+    
+    // Determine the image type from the URI
+    const imageType = imageUri.toLowerCase().includes('.png') ? 'png' : 'jpeg';
+    
+    onProgress?.(100);
+    return `data:image/${imageType};base64,${base64}`;
+    
+  } catch (error) {
+    console.error('Error converting image to base64:', error);
+    if (error instanceof ImageProcessingError) {
+      throw error;
+    }
+    throw new ImageProcessingError(`Failed to convert image: ${error.message}`, 'CONVERSION_FAILED');
+  }
+};
+
+// Enhanced HTML Generation with Template Support
+const generateHtmlContent = async (invoiceData, formatCurrency, template = 'modern', onProgress) => {
+  try {
+    onProgress?.(0);
+    
+    const {
+      documentType,
+      invoiceNumber,
+      date,
+      businessInfo,
+      customerInfo,
+      items,
+      TaxRate,
+      notes,
+      businessLogo,
+      customerSignature,
+      subtotal,
+      tax,
+      total
+    } = invoiceData;
+
+    const selectedTemplate = INVOICE_TEMPLATES[template] || INVOICE_TEMPLATES.modern;
+    
+    onProgress?.(20);
+
+    // Convert images to base64 with progress tracking
+    let businessLogoBase64 = null;
+    let businessSignatureBase64 = null;
+    
+    if (businessLogo) {
+      try {
+        businessLogoBase64 = await convertImageToBase64(businessLogo, (progress) => {
+          onProgress?.(20 + (progress * 0.2)); // 20-40%
+        });
+      } catch (error) {
+        console.warn('Failed to process business logo:', error);
+      }
+    }
+    
+    onProgress?.(40);
+    
+    if (customerSignature) {
+      try {
+        businessSignatureBase64 = await convertImageToBase64(customerSignature, (progress) => {
+          onProgress?.(40 + (progress * 0.2)); // 40-60%
+        });
+      } catch (error) {
+        console.warn('Failed to process signature:', error);
+      }
+    }
+    
+    onProgress?.(60);
+
+    // Generate items HTML with safety checks
+    const itemsHtml = items?.map(item => {
+      const quantity = parseFloat(item.quantity || 0);
+      const price = parseFloat(item.price || 0);
+      const itemTotal = quantity * price;
+      
+      return `
+        <tr>
+          <td class="col-description">${sanitizeText(item.description)}</td>
+          <td class="col-quantity">${quantity}</td>
+          <td class="col-price">${formatCurrency(price)}</td>
+          <td class="col-total">${formatCurrency(itemTotal)}</td>
+        </tr>
+      `;
+    }).join('') || '';
+    
+    onProgress?.(80);
+
+    const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${sanitizeText(documentType?.toUpperCase())} ${sanitizeText(invoiceNumber)}</title>
+      <style>
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        
+        @page {
+          size: A4;
+          margin: 15mm;
+        }
+        
+        body {
+          font-family: ${selectedTemplate.fontFamily};
+          font-size: 11px;
+          line-height: 1.3;
+          color: #2d3748;
+          width: 210mm;
+          min-height: 297mm;
+          margin: 0 auto;
+          padding: 0;
+          background: white;
+        }
+        
+        .page-container {
+          width: 100%;
+          max-width: 180mm;
+          margin: 0 auto;
+        }
+        
+        /* Header Section */
+        .header {
+          display: table;
+          width: 100%;
+          margin-bottom: 20px;
+          border-bottom: 2px solid ${selectedTemplate.primaryColor};
+          padding-bottom: 15px;
+          page-break-inside: avoid;
+        }
+        
+        .header-left {
+          display: table-cell;
+          width: 50%;
+          vertical-align: top;
+        }
+        
+        .header-right {
+          display: table-cell;
+          width: 50%;
+          vertical-align: top;
+          text-align: right;
+        }
+        
+        .business-logo {
+          max-width: 120px;
+          max-height: 60px;
+          object-fit: contain;
+          margin-bottom: 8px;
+          display: block;
+        }
+        
+        .business-name {
+          font-size: 16px;
+          font-weight: bold;
+          color: #1a202c;
+          margin-bottom: 4px;
+        }
+        
+        .document-title {
+          font-size: 24px;
+          font-weight: bold;
+          color: ${selectedTemplate.primaryColor};
+          margin-bottom: 4px;
+        }
+        
+        .document-number {
+          font-size: 14px;
+          color: #4a5568;
+          margin-bottom: 2px;
+        }
+        
+        .document-date {
+          font-size: 11px;
+          color: #718096;
+        }
+        
+        /* Party Information */
+        .party-info {
+          display: table;
+          width: 100%;
+          margin-bottom: 20px;
+          page-break-inside: avoid;
+        }
+        
+        .party-from {
+          display: table-cell;
+          width: 48%;
+          vertical-align: top;
+          padding-right: 4%;
+        }
+        
+        .party-to {
+          display: table-cell;
+          width: 48%;
+          vertical-align: top;
+        }
+        
+        .party-title {
+          font-size: 12px;
+          font-weight: bold;
+          color: ${selectedTemplate.primaryColor};
+          margin-bottom: 6px;
+          padding-bottom: 3px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .party-name {
+          font-weight: bold;
+          font-size: 12px;
+          color: #1a202c;
+          margin-bottom: 3px;
+        }
+        
+        .party-detail {
+          font-size: 10px;
+          color: #4a5568;
+          margin-bottom: 2px;
+          line-height: 1.2;
+        }
+        
+        /* Items Table */
+        .items-section {
+          margin-bottom: 15px;
+          page-break-inside: avoid;
+        }
+        
+        .items-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 10px;
+        }
+        
+        .items-table th {
+          background-color: ${selectedTemplate.accentColor};
+          padding: 8px 6px;
+          text-align: left;
+          font-weight: bold;
+          border: 1px solid #cbd5e0;
+          color: #2d3748;
+          font-size: 10px;
+        }
+        
+        .items-table td {
+          padding: 6px;
+          border: 1px solid #e2e8f0;
+          vertical-align: top;
+          font-size: 10px;
+        }
+        
+        .items-table tr:nth-child(even) {
+          background-color: #f8f9fa;
+        }
+        
+        .col-description { width: 45%; }
+        .col-quantity { width: 12%; text-align: center; }
+        .col-price { width: 18%; text-align: right; }
+        .col-total { width: 18%; text-align: right; }
+        
+        /* Totals Section */
+        .totals-wrapper {
+          display: table;
+          width: 100%;
+          margin-bottom: 15px;
+        }
+        
+        .totals-spacer {
+          display: table-cell;
+          width: 60%;
+        }
+        
+        .totals-section {
+          display: table-cell;
+          width: 40%;
+          vertical-align: top;
+        }
+        
+        .total-row {
+          display: table;
+          width: 100%;
+          margin-bottom: 3px;
+        }
+        
+        .total-label {
+          display: table-cell;
+          padding: 4px 8px 4px 0;
+          font-size: 11px;
+          color: #4a5568;
+        }
+        
+        .total-value {
+          display: table-cell;
+          text-align: right;
+          padding: 4px 0;
+          font-size: 11px;
+          color: #2d3748;
+        }
+        
+        .grand-total {
+          border-top: 2px solid ${selectedTemplate.primaryColor};
+          border-bottom: 2px solid ${selectedTemplate.primaryColor};
+          background-color: ${selectedTemplate.accentColor};
+          margin-top: 6px;
+        }
+        
+        .grand-total .total-label,
+        .grand-total .total-value {
+          font-weight: bold;
+          font-size: 13px;
+          padding: 8px 8px 8px 0;
+          color: #1a202c;
+        }
+        
+        .grand-total .total-value {
+          padding-right: 0;
+        }
+        
+        /* Notes Section */
+        .notes-section {
+          margin-bottom: 20px;
+          page-break-inside: avoid;
+        }
+        
+        .notes-title {
+          font-size: 12px;
+          font-weight: bold;
+          color: ${selectedTemplate.primaryColor};
+          margin-bottom: 6px;
+        }
+        
+        .notes-content {
+          background-color: #f8f9fa;
+          padding: 10px;
+          border-left: 3px solid ${selectedTemplate.primaryColor};
+          border-radius: 3px;
+          font-size: 10px;
+          line-height: 1.4;
+          color: #4a5568;
+        }
+        
+        /* Signature Section */
+        .signature-section {
+          display: table;
+          width: 100%;
+          margin-top: 30px;
+          page-break-inside: avoid;
+        }
+        
+        .signature-business {
+          display: table-cell;
+          width: 48%;
+          vertical-align: bottom;
+          text-align: center;
+          padding-right: 4%;
+        }
+        
+        .signature-customer {
+          display: table-cell;
+          width: 48%;
+          vertical-align: bottom;
+          text-align: center;
+          position: relative;
+          padding-left: 10%;
+        }
+        
+        .signature-line {
+          border-bottom: 1px solid #4a5568;
+          height: 40px;
+          margin-bottom: 6px;
+        }
+        
+        .signature-image {
+          max-width: 140px;
+          max-height: 40px;
+          object-fit: contain;
+          border: 1px solid #e2e8f0;
+          margin-bottom: 6px;
+          display: block;
+          margin-left: auto;
+          margin-right: auto;
+        }
+        
+        .signature-label {
+          font-size: 9px;
+          color: #718096;
+          font-weight: 500;
+        }
+        
+        /* Footer */
+        .footer {
+          text-align: center;
+          margin-top: 25px;
+          padding-top: 15px;
+          border-top: 1px solid #e2e8f0;
+          font-size: 9px;
+          color: #718096;
+          page-break-inside: avoid;
+        }
+        
+        .footer-thank-you {
+          font-weight: 500;
+          margin-bottom: 3px;
+        }
+        
+        /* Print Specific Styles */
+        @media print {
+          body {
+            font-size: 10px;
+            margin: 0;
+            padding: 0;
+          }
+          
+          .page-container {
+            max-width: none;
+            width: 100%;
+          }
+          
+          .no-print {
+            display: none !important;
+          }
+          
+          .page-break {
+            page-break-before: always;
+          }
+          
+          .avoid-break {
+            page-break-inside: avoid;
+          }
+        }
+        
+        /* Responsive adjustments for very long content */
+        .items-table tbody tr {
+          page-break-inside: avoid;
+        }
+        
+        .items-table thead {
+          display: table-header-group;
+        }
+        
+        /* Ensure consistent spacing */
+        .section-spacing {
+          margin-bottom: 15px;
+        }
+        
+        /* Error styling */
+        .error-placeholder {
+          background-color: #fee2e2;
+          border: 1px dashed #ef4444;
+          padding: 10px;
+          text-align: center;
+          color: #dc2626;
+          font-size: 10px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="page-container">
+        <!-- Header Section -->
+        <div class="header avoid-break">
+          <div class="header-left">
+            ${businessLogoBase64 ? 
+              `<img src="${businessLogoBase64}" alt="Business Logo" class="business-logo">` : 
+              ''
+            }
+            <div class="business-name">${sanitizeText(businessInfo?.name)}</div>
+          </div>
+          <div class="header-right">
+            <div class="document-title">${sanitizeText(documentType?.toUpperCase())}</div>
+            <div class="document-number">${sanitizeText(invoiceNumber)}</div>
+            <div class="document-date">Date: ${sanitizeText(date)}</div>
+          </div>
+        </div>
+        
+        <!-- Party Information -->
+        <div class="party-info avoid-break section-spacing">
+          <div class="party-from">
+            <div class="party-title">From:</div>
+            <div class="party-name">${sanitizeText(businessInfo?.name)}</div>
+            ${businessInfo?.address ? `<div class="party-detail">${sanitizeText(businessInfo.address)}</div>` : ''}
+            ${businessInfo?.phone ? `<div class="party-detail">Phone: ${sanitizeText(businessInfo.phone)}</div>` : ''}
+            ${businessInfo?.email ? `<div class="party-detail">Email: ${sanitizeText(businessInfo.email)}</div>` : ''}
+            ${businessInfo?.taxId ? `<div class="party-detail">Tax ID: ${sanitizeText(businessInfo.taxId)}</div>` : ''}
+          </div>
+          
+          <div class="party-to">
+            <div class="party-title">To:</div>
+            <div class="party-name">${sanitizeText(customerInfo?.name)}</div>
+            ${customerInfo?.address ? `<div class="party-detail">${sanitizeText(customerInfo.address)}</div>` : ''}
+            ${customerInfo?.phone ? `<div class="party-detail">Phone: ${sanitizeText(customerInfo.phone)}</div>` : ''}
+            ${customerInfo?.email ? `<div class="party-detail">Email: ${sanitizeText(customerInfo.email)}</div>` : ''}
+          </div>
+        </div>
+        
+        <!-- Items Table -->
+        <div class="items-section section-spacing">
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th class="col-description">Description</th>
+                <th class="col-quantity">Qty</th>
+                <th class="col-price">Unit Price</th>
+                <th class="col-total">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- Totals Section -->
+        <div class="totals-wrapper section-spacing">
+          <div class="totals-spacer"></div>
+          <div class="totals-section">
+            <div class="total-row">
+              <div class="total-label">Subtotal:</div>
+              <div class="total-value">${formatCurrency(subtotal || 0)}</div>
+            </div>
+            <div class="total-row">
+              <div class="total-label">Tax (${TaxRate || 0}%):</div>
+              <div class="total-value">${formatCurrency(tax || 0)}</div>
+            </div>
+            <div class="total-row grand-total">
+              <div class="total-label">TOTAL:</div>
+              <div class="total-value">${formatCurrency(total || 0)}</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Notes Section -->
+        ${notes ? `
+          <div class="notes-section section-spacing avoid-break">
+            <div class="notes-title">Notes:</div>
+            <div class="notes-content">${sanitizeText(notes)}</div>
+          </div>
+        ` : ''}
+        
+        <!-- Signature Section -->
+        <div class="signature-section avoid-break">
+          <div class="signature-business">
+            <div class="signature-line"></div>
+            <div class="signature-label">Customer Signature</div>
+          </div>
+          
+          <div class="signature-customer">
+            ${businessSignatureBase64 ? 
+              `<img src="${businessSignatureBase64}" alt="Business Signature" class="signature-image">` : 
+              `<div class="signature-line"></div>`
+            }
+            <div class="signature-label">Business Signature</div>
+          </div>
+        </div>
+        
+        <!-- Footer -->
+        <div class="footer avoid-break">
+          <div class="footer-thank-you">Thank you for your business!</div>
+          <div>Generated on ${new Date().toLocaleDateString()}</div>
+        </div>
+      </div>
+    </body>
+    </html>
+    `;
+    
+    onProgress?.(100);
+    return htmlContent;
+    
+  } catch (error) {
+    console.error('Error generating HTML content:', error);
+    throw new PDFGenerationError(`Failed to generate HTML: ${error.message}`, 'HTML_GENERATION_FAILED');
+  }
+};
+
+// Enhanced PDF Generation with Caching
+const pdfCache = new Map();
+
+export const generateInvoicePdf = async (invoiceData, options = {}) => {
+  const {
+    template = 'modern',
+    useCache = true,
+    onProgress,
+    timeout = PDF_CONFIG.defaultTimeout
+  } = options;
+  
+  try {
+    onProgress?.(0);
+    
+    // Validate input data
+    if (!invoiceData || !invoiceData.invoiceNumber) {
+      throw new PDFGenerationError('Invalid invoice data', 'INVALID_DATA');
+    }
+    
+    // Check cache first
+    const cacheKey = `${invoiceData.invoiceNumber}_${template}_${JSON.stringify(invoiceData).slice(0, 100)}`;
+    if (useCache && pdfCache.has(cacheKey)) {
+      const cached = pdfCache.get(cacheKey);
+      if (Date.now() - cached.timestamp < PDF_CONFIG.cacheExpiry) {
+        onProgress?.(100);
+        return cached.uri;
+      } else {
+        pdfCache.delete(cacheKey);
+      }
+    }
+    
+    onProgress?.(10);
+    
+    // Define currency formatting function
+    const CURRENCIES = [
+      { code: 'GHC', symbol: '₵', name: 'Ghana Cedi' },
+      { code: 'USD', symbol: '$', name: 'US Dollar' },
+      { code: 'EUR', symbol: '€', name: 'Euro' },
+      { code: 'GBP', symbol: '£', name: 'British Pound' },
+      { code: 'NGN', symbol: '₦', name: 'Nigerian Naira' },
+      { code: 'ZAR', symbol: 'R', name: 'South African Rand' }
+    ];
+    
+    const currencyObj = CURRENCIES.find(c => c.code === (invoiceData.currency || 'USD'));
+    const formatCurrency = (amount) => {
+      const numAmount = parseFloat(amount) || 0;
+      return `${currencyObj?.symbol || '$'}${numAmount.toFixed(2)}`;
+    };
+
+    onProgress?.(20);
+
+    // Generate HTML content with progress tracking
+    const htmlContent = await generateHtmlContent(
+      invoiceData, 
+      formatCurrency, 
+      template,
+      (htmlProgress) => onProgress?.(20 + (htmlProgress * 0.6)) // 20-80%
+    );
+    
+    onProgress?.(80);
+    
+    // Generate PDF with timeout
+    const pdfPromise = Print.printToFileAsync({
+      html: htmlContent,
+      base64: false,
+      width: 595, // A4 width in points
+      height: 842  // A4 height in points
+    });
+    
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new PDFGenerationError('PDF generation timeout', 'TIMEOUT')), timeout);
+    });
+    
+    const { uri } = await Promise.race([pdfPromise, timeoutPromise]);
+    
+    onProgress?.(90);
+    
+    // Move to permanent location with unique name
+    const filename = generateUniqueFilename(invoiceData);
+    const permanentUri = FileSystem.documentDirectory + filename;
+    
+    await FileSystem.moveAsync({
+      from: uri,
+      to: permanentUri
+    });
+
+    onProgress?.(95);
+    
+    // Cache the result
+    if (useCache) {
+      pdfCache.set(cacheKey, {
+        uri: permanentUri,
+        timestamp: Date.now()
+      });
+      
+      // Clean old cache entries
+      if (pdfCache.size > 50) {
+        const oldestKey = pdfCache.keys().next().value;
+        pdfCache.delete(oldestKey);
+      }
+    }
+    
+    onProgress?.(100);
+    console.log('PDF generated successfully at:', permanentUri);
+    return permanentUri;
+
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    if (error instanceof PDFGenerationError || error instanceof ImageProcessingError) {
+      throw error;
+    }
+    throw new PDFGenerationError(`Failed to generate PDF: ${error.message}`, 'UNKNOWN_ERROR');
+  }
+};
+
+// Enhanced PrintPdf Component with Progress Tracking
+export const PrintPdf = ({ 
+  visible, 
+  onClose, 
+  invoiceData, 
+  showToast, 
+  formatCurrency,
+  template = 'modern'
+}) => {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [pdfUri, setPdfUri] = useState(null);
+  const [currentOperation, setCurrentOperation] = useState('');
+  const progressTimeoutRef = useRef(null);
+  
+  // Memoized HTML content for preview
+  const previewHtmlContent = useMemo(() => {
+    if (!invoiceData) return null;
+    
+    try {
+      const CURRENCIES = [
+        { code: 'GHC', symbol: '₵', name: 'Ghana Cedi' },
+        { code: 'USD', symbol: '$', name: 'US Dollar' },
+        { code: 'EUR', symbol: '€', name: 'Euro' },
+        { code: 'GBP', symbol: '£', name: 'British Pound' },
+        { code: 'NGN', symbol: '₦', name: 'Nigerian Naira' },
+        { code: 'ZAR', symbol: 'R', name: 'South African Rand' }
+      ];
+      
+      const currencyObj = CURRENCIES.find(c => c.code === (invoiceData.currency || 'USD'));
+      const previewFormatCurrency = (amount) => {
+        const numAmount = parseFloat(amount) || 0;
+        return `${currencyObj?.symbol || '$'}${numAmount.toFixed(2)}`;
+      };
+      
+      return { invoiceData, formatCurrency: previewFormatCurrency };
+    } catch (error) {
+      console.error('Error preparing preview content:', error);
+      return null;
+    }
+  }, [invoiceData]);
+
+  // Enhanced PDF generation with progress tracking
+  const generatePDF = useCallback(async () => {
+    try {
+      setIsGenerating(true);
+      setProgress(0);
+      setCurrentOperation('Preparing PDF generation...');
+      
+      const uri = await generateInvoicePdf(invoiceData, {
+        template,
+        onProgress: (progressValue) => {
+          setProgress(progressValue);
+          
+          // Update operation description based on progress
+          if (progressValue < 20) {
+            setCurrentOperation('Validating data...');
+          } else if (progressValue < 40) {
+            setCurrentOperation('Processing images...');
+          } else if (progressValue < 80) {
+            setCurrentOperation('Generating content...');
+          } else if (progressValue < 95) {
+            setCurrentOperation('Creating PDF...');
+          } else {
+            setCurrentOperation('Finalizing...');
+          }
+          
+          // Clear any existing timeout
+          if (progressTimeoutRef.current) {
+            clearTimeout(progressTimeoutRef.current);
+          }
+          
+          // Set a timeout to complete progress if it gets stuck
+          progressTimeoutRef.current = setTimeout(() => {
+            if (progressValue < 100) {
+              setProgress(100);
+              setCurrentOperation('Completed');
+            }
+          }, 2000);
+        }
+      });
+      
+      setPdfUri(uri);
+      setCurrentOperation('PDF generated successfully!');
+      showToast('PDF generated successfully!', 'success');
+      return uri;
+      
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      
+      let errorMessage = 'Failed to generate PDF';
+      if (error instanceof PDFGenerationError) {
+        switch (error.code) {
+          case 'INVALID_DATA':
+            errorMessage = 'Invalid invoice data. Please check all required fields.';
+            break;
+          case 'TIMEOUT':
+            errorMessage = 'PDF generation timed out. Please try again.';
+            break;
+          case 'HTML_GENERATION_FAILED':
+            errorMessage = 'Failed to generate document content.';
+            break;
+          default:
+            errorMessage = error.message;
+            // Final part of PrintPdf component - continuing from error handling in generatePDF function
+// This continues exactly from where the document was cut off at "errorMessage = error.message;"
+
+            break;
+        }
+      } else if (error.name === 'ImageProcessingError') {
+          switch (error.code) {
+            case 'INVALID_URI':
+              errorMessage = 'Invalid image format. Please check your images.';
+              break;
+            case 'FILE_TOO_LARGE':
+              errorMessage = 'Image file too large. Please use smaller images.';
+              break;
+            case 'CONVERSION_FAILED':
+              errorMessage = 'Failed to process images.';
+              break;
+            default:
+              errorMessage = error.message;
+          }
+        } else {
+          errorMessage = error.message || 'Unknown error occurred';
+        }
+        
+        reportPDFError(error, { invoiceData, template });
+        showToast(errorMessage, 'error');
+        throw error;
+      } finally {
+        setIsGenerating(false);
+        setProgress(0);
+        setCurrentOperation('');
+        
+        // Clear timeout
+        if (progressTimeoutRef.current) {
+          clearTimeout(progressTimeoutRef.current);
+        }
+      }
+    }, [invoiceData, template, showToast]);
+
+  // Enhanced sharing with multiple options
+  const handleShare = useCallback(async () => {
+    if (!pdfUri) {
+      showToast('Please generate PDF first', 'error');
+      return;
+    }
+
+    try {
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        showToast('Sharing is not available on this device', 'error');
+        return;
+      }
+
+      await Sharing.shareAsync(pdfUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `Share ${invoiceData.documentType} ${invoiceData.invoiceNumber}`,
+        UTI: 'com.adobe.pdf'
+      });
+    } catch (error) {
+      console.error('Error sharing PDF:', error);
+      showToast('Failed to share PDF', 'error');
+    }
+  }, [pdfUri, invoiceData, showToast]);
+
+  // Enhanced save to device
+  const handleSaveToDevice = useCallback(async () => {
+    if (!pdfUri) {
+      showToast('Please generate PDF first', 'error');
+      return;
+    }
+
+    try {
+      const filename = generateUniqueFilename(invoiceData);
+      const documentDirectory = FileSystem.documentDirectory;
+      const newPath = documentDirectory + filename;
+
+      await FileSystem.copyAsync({
+        from: pdfUri,
+        to: newPath
+      });
+
+      showToast('PDF saved to device successfully!', 'success');
+    } catch (error) {
+      console.error('Error saving PDF:', error);
+      showToast('Failed to save PDF to device', 'error');
+    }
+  }, [pdfUri, invoiceData, showToast]);
+
+  // Preview HTML content
+  const handlePreview = useCallback(async () => {
+    if (!previewHtmlContent) return;
+
+    try {
+      const htmlContent = await generateHtmlContent(
+        previewHtmlContent.invoiceData,
+        previewHtmlContent.formatCurrency,
+        template
+      );
+      
+      // You could implement a WebView-based preview here
+      showToast('Preview generated successfully', 'success');
+    } catch (error) {
+      console.error('Error generating preview:', error);
+      showToast('Failed to generate preview', 'error');
+    }
+  }, [previewHtmlContent, template, showToast]);
+
+  // Main component render
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="formSheet"
+      onRequestClose={onClose}
+    >
+      <SafeAreaView style={[
+        styles.modalContainer,
+        { backgroundColor: '#f8fafc' }
+      ]}>
+        {/* Header */}
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>
+            Generate PDF - {invoiceData?.documentType?.toUpperCase()} {invoiceData?.invoiceNumber}
+          </Text>
+          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+            <Feather name="x" size={24} color="#64748b" />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
+          {/* Progress Section */}
+          {isGenerating && (
+            <View style={styles.progressSection}>
+              <Text style={styles.progressTitle}>Generating PDF...</Text>
+              <Text style={styles.progressDescription}>{currentOperation}</Text>
+              
+              <View style={styles.progressBarContainer}>
+                <View 
+                  style={[
+                    styles.progressBar,
+                    { width: `${progress}%` }
+                  ]} 
+                />
+              </View>
+              
+              <Text style={styles.progressText}>{Math.round(progress)}%</Text>
+              
+              <View style={styles.loadingIndicator}>
+                <ActivityIndicator size="large" color="#2563eb" />
+              </View>
+            </View>
+          )}
+
+          {/* Success Section */}
+          {pdfUri && !isGenerating && (
+            <View style={styles.successSection}>
+              <View style={styles.successIcon}>
+                <Feather name="check-circle" size={48} color="#10b981" />
+              </View>
+              <Text style={styles.successTitle}>PDF Generated Successfully!</Text>
+              <Text style={styles.successDescription}>
+                Your {invoiceData.documentType} is ready to share or save.
+              </Text>
+            </View>
+          )}
+
+          {/* Error Section */}
+          {error && !isGenerating && (
+            <View style={styles.errorSection}>
+              <View style={styles.errorIcon}>
+                <Feather name="alert-circle" size={48} color="#ef4444" />
+              </View>
+              <Text style={styles.errorTitle}>Generation Failed</Text>
+              <Text style={styles.errorDescription}>
+                {error.message || 'An error occurred while generating the PDF'}
+              </Text>
+              {error.code && (
+                <Text style={styles.errorCode}>Error Code: {error.code}</Text>
+              )}
+            </View>
+          )}
+
+          {/* Action Buttons */}
+          <View style={styles.actionSection}>
+            {!isGenerating && !pdfUri && (
+              <TouchableOpacity
+                style={[styles.actionButton, styles.generateButton]}
+                onPress={generatePDF}
+              >
+                <Feather name="file-text" size={20} color="white" />
+                <Text style={styles.actionButtonText}>Generate PDF</Text>
+              </TouchableOpacity>
+            )}
+
+            {pdfUri && (
+              <>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.shareButton]}
+                  onPress={handleShare}
+                >
+                  <Feather name="share" size={18} color="white" />
+                  <Text style={styles.actionButtonText}>Share PDF</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.saveButton]}
+                  onPress={handleSaveToDevice}
+                >
+                  <Feather name="download" size={18} color="white" />
+                  <Text style={styles.actionButtonText}>Save to Device</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.previewButton]}
+                  onPress={handlePreview}
+                >
+                  <Feather name="eye" size={18} color="white" />
+                  <Text style={styles.actionButtonText}>Preview</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {error && (
+              <TouchableOpacity
+                style={[styles.actionButton, styles.retryButton]}
+                onPress={generatePDF}
+              >
+                <Feather name="refresh-cw" size={18} color="white" />
+                <Text style={styles.actionButtonText}>Try Again</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Invoice Preview Summary */}
+          {invoiceData && (
+            <View style={styles.summarySection}>
+              <Text style={styles.summaryTitle}>Document Summary</Text>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Type:</Text>
+                <Text style={styles.summaryValue}>
+                  {invoiceData.documentType?.toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Number:</Text>
+                <Text style={styles.summaryValue}>{invoiceData.invoiceNumber}</Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Date:</Text>
+                <Text style={styles.summaryValue}>{invoiceData.date}</Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Customer:</Text>
+                <Text style={styles.summaryValue}>{invoiceData.customerInfo?.name}</Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Total:</Text>
+                <Text style={[styles.summaryValue, styles.totalAmount]}>
+                  {formatCurrency ? formatCurrency(invoiceData.total || 0) : `$${(invoiceData.total || 0).toFixed(2)}`}
+                </Text>
+              </View>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Items:</Text>
+                <Text style={styles.summaryValue}>
+                  {invoiceData.items?.length || 0} item(s)
+                </Text>
+              </View>
+            </View>
+          )}
+        </ScrollView>
+
+        {/* Footer */}
+        <View style={styles.modalFooter}>
+          <TouchableOpacity
+            style={[styles.footerButton, styles.cancelButton]}
+            onPress={onClose}
+          >
+            <Text style={styles.cancelButtonText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </Modal>
+  );
+};
+
+// Styles for the PrintPdf component
+const styles = {
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#f8fafc'
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    backgroundColor: 'white'
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e293b',
+    flex: 1
+  },
+  closeButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: '#f1f5f9'
+  },
+  modalContent: {
+    flex: 1,
+    padding: 20
+  },
+  progressSection: {
+    backgroundColor: 'white',
+    padding: 24,
+    borderRadius: 12,
+    marginBottom: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  progressTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 8
+  },
+  progressDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 20,
+    textAlign: 'center'
+  },
+  progressBarContainer: {
+    width: '100%',
+    height: 8,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 4,
+    marginBottom: 12,
+    overflow: 'hidden'
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#2563eb',
+    borderRadius: 4
+  },
+  progressText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#2563eb',
+    marginBottom: 20
+  },
+  loadingIndicator: {
+    marginTop: 10
+  },
+  successSection: {
+    backgroundColor: 'white',
+    padding: 24,
+    borderRadius: 12,
+    marginBottom: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  successIcon: {
+    marginBottom: 16
+  },
+  successTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#059669',
+    marginBottom: 8
+  },
+  successDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center'
+  },
+  errorSection: {
+    backgroundColor: 'white',
+    padding: 24,
+    borderRadius: 12,
+    marginBottom: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  errorIcon: {
+    marginBottom: 16
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#dc2626',
+    marginBottom: 8
+  },
+  errorDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 8
+  },
+  errorCode: {
+    fontSize: 12,
+    color: '#9ca3af',
+    fontFamily: 'monospace'
+  },
+  actionSection: {
+    marginBottom: 20
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 8,
+    marginBottom: 12
+  },
+  generateButton: {
+    backgroundColor: '#2563eb'
+  },
+  shareButton: {
+    backgroundColor: '#059669'
+  },
+  saveButton: {
+    backgroundColor: '#ea580c'
+  },
+  previewButton: {
+    backgroundColor: '#7c3aed'
+  },
+  retryButton: {
+    backgroundColor: '#dc2626'
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '500',
+    marginLeft: 8
+  },
+  summarySection: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  summaryTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 16
+  },
+  summaryItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9'
+  },
+  summaryLabel: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '500'
+  },
+  summaryValue: {
+    fontSize: 14,
+    color: '#1e293b',
+    fontWeight: '500'
+  },
+  totalAmount: {
+    fontSize: 16,
+    color: '#059669',
+    fontWeight: '700'
+  },
+  modalFooter: {
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    backgroundColor: 'white'
+  },
+  footerButton: {
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center'
+  },
+  cancelButton: {
+    backgroundColor: '#f1f5f9'
+  },
+  cancelButtonText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '500'
+  }
+};
+
+// Dark theme styles
+const darkStyles = {
+  modalContainer: {
+    backgroundColor: '#1f2937'
+  },
+  modalHeader: {
+    backgroundColor: '#374151',
+    borderBottomColor: '#4b5563'
+  },
+  modalTitle: {
+    color: '#f3f4f6'
+  },
+  closeButton: {
+    backgroundColor: '#4b5563'
+  },
+  progressSection: {
+    backgroundColor: '#374151'
+  },
+  progressTitle: {
+    color: '#f3f4f6'
+  },
+  progressDescription: {
+    color: '#9ca3af'
+  },
+  successSection: {
+    backgroundColor: '#374151'
+  },
+  successDescription: {
+    color: '#9ca3af'
+  },
+  errorSection: {
+    backgroundColor: '#374151'
+  },
+  errorDescription: {
+    color: '#9ca3af'
+  },
+  summarySection: {
+    backgroundColor: '#374151'
+  },
+  summaryTitle: {
+    color: '#f3f4f6'
+  },
+  summaryItem: {
+    borderBottomColor: '#4b5563'
+  },
+  summaryLabel: {
+    color: '#9ca3af'
+  },
+  summaryValue: {
+    color: '#f3f4f6'
+  },
+  modalFooter: {
+    backgroundColor: '#374151',
+    borderTopColor: '#4b5563'
+  },
+  cancelButton: {
+    backgroundColor: '#4b5563'
+  },
+  cancelButtonText: {
+    color: '#9ca3af'
+  }
+};
+
+// Export the complete component
+export { PrintPdf, usePDFOperations, validateInvoiceData, optimizePDFSettings, PDFPerformanceMonitor, PDFTemplateManager, PDFBatchProcessor };

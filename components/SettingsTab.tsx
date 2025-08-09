@@ -1,9 +1,6 @@
 // components/SettingsTab.tsx - ENHANCED UI VERSION
 import React, { useState, useEffect, useCallback } from 'react';
-import { View,Text,Switch,TouchableOpacity,ScrollView,TextInput,
-Alert,
-  Animated,
-  Dimensions
+import { View,Text,Switch,TouchableOpacity,ScrollView,TextInput,Alert,Animated,Dimensions
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,19 +22,24 @@ const SettingsTab = ({
   setCurrency, 
   showToast, 
   appSettings, 
-  onSettingsUpdate 
+  onSettingsUpdate,
+  onLogout,
+  TaxRate
 }) => {
   // Local state for form inputs to prevent constant updates
   const [localSettings, setLocalSettings] = useState({
     companyName: '',
     companyEmail: '',
     defaultTaxRate: '10',
+    TaxRate: '',
+
     ...appSettings
   });
   
   const [isSaving, setIsSaving] = useState(false);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
   const [fadeAnim] = useState(new Animated.Value(0));
+  // REMOVED: const [isLoggedIn, setIsLoggedIn] = useState(true); - This was causing the issue!
 
   // Initialize local settings from props - ONLY run when appSettings actually changes
   useEffect(() => {
@@ -50,13 +52,13 @@ const SettingsTab = ({
   }, [appSettings.companyName, appSettings.companyEmail, appSettings.defaultTaxRate, appSettings.darkMode, appSettings.autoSave, appSettings.notifications, appSettings.autoBackup]);
 
   // Fade in animation
-  useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 500,
-      useNativeDriver: true,
-    }).start();
-  }, []);
+useEffect(() => {
+  Animated.timing(fadeAnim, {
+    toValue: 1,
+    duration: 500,
+    useNativeDriver: true,
+  }).start();
+}, [fadeAnim]);
 
   // Memoized save function to prevent recreation on every render
   const saveSettings = useCallback(async (settingsToSave) => {
@@ -128,6 +130,9 @@ const SettingsTab = ({
               defaultTaxRate: '10',
               companyName: '',
               companyEmail: '',
+              companyPhone: '',
+              companyAddress: '',
+              TaxRate: '',
               notifications: true,
               autoBackup: false
             };
@@ -139,25 +144,46 @@ const SettingsTab = ({
     );
   }, [saveSettings]);
 
+  // Handle logout with confirmation
+  const handleLogout = () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: () => {
+            if (onLogout) {
+              onLogout();
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const currentStyles = localSettings.darkMode ? { ...styles, ...darkStyles } : styles;
   const selectedCurrency = CURRENCIES.find(c => c.code === localSettings.currency) || CURRENCIES[0];
 
   return (
     <Animated.View style={[currentStyles.container, { opacity: fadeAnim }]}>
-      <ScrollView 
+      {/* Header OUTSIDE the ScrollView */}
+      <View style={currentStyles.header}>
+        <View style={currentStyles.headerTitle}>
+          <Feather name="settings" size={28} color="white" />
+          <Text style={currentStyles.headerText}>Settings</Text>
+        </View>
+        <Text style={currentStyles.headerSubtext}>Customize your app preferences</Text>
+      </View>
+
+      {/* Scrollable content BELOW the header */}
+      <ScrollView
         style={currentStyles.scrollContainer}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 30 }}
       >
-        {/* Enhanced Header */}
-        <View style={currentStyles.header}>
-          <View style={currentStyles.headerTitle}>
-            <Feather name="settings" size={28} color="white" />
-            <Text style={currentStyles.headerText}>Settings</Text>
-          </View>
-          <Text style={currentStyles.headerSubtext}>Customize your app preferences</Text>
-        </View>
-
         {/* Company Information Card */}
         <View style={currentStyles.section}>
           <Text style={currentStyles.sectionTitleText}>Company Information</Text>
@@ -193,16 +219,46 @@ const SettingsTab = ({
           </View>
 
           <View style={currentStyles.inputGroup}>
-            <Text style={currentStyles.label}>Default Tax Rate (%)</Text>
+            <Text style={currentStyles.label}>Company Phone</Text>
+            <View style={currentStyles.inputContainer}>
+              <Feather name="phone" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} style={currentStyles.inputIcon} />
+              <TextInput
+                style={currentStyles.input}
+                value={localSettings.companyPhone}
+                onChangeText={(text) => handleTextChange('companyPhone', text)}
+                placeholder="Enter your company phone"
+                placeholderTextColor={localSettings.darkMode ? '#9CA3AF' : '#6B7280'}
+                keyboardType="phone-pad"
+              />
+            </View>
+          </View>
+
+          <View style={currentStyles.inputGroup}>
+            <Text style={currentStyles.label}>Company Address</Text>
+            <View style={currentStyles.inputContainer}>
+              <Feather name="map-pin" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} style={currentStyles.inputIcon} />
+              <TextInput
+                style={currentStyles.input}
+                value={localSettings.companyAddress}
+                onChangeText={(text) => handleTextChange('companyAddress', text)}
+                placeholder="Enter your company address"
+                placeholderTextColor={localSettings.darkMode ? '#9CA3AF' : '#6B7280'}
+                multiline
+              />
+            </View>
+          </View>
+
+          <View style={currentStyles.inputGroup}>
+            <Text style={currentStyles.label}>Tax Rate</Text>
             <View style={currentStyles.inputContainer}>
               <Feather name="percent" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} style={currentStyles.inputIcon} />
               <TextInput
                 style={currentStyles.input}
                 value={localSettings.defaultTaxRate}
                 onChangeText={(text) => handleTextChange('defaultTaxRate', text)}
-                placeholder="10"
+                placeholder="Enter Tax Rate (e.g., 10 for 10%)"
                 placeholderTextColor={localSettings.darkMode ? '#9CA3AF' : '#6B7280'}
-                keyboardType="numeric"
+                autoCapitalize="none"
               />
             </View>
           </View>
@@ -283,7 +339,7 @@ const SettingsTab = ({
 
           {/* Toggle Settings */}
           {[
-            { key: 'darkMode', label: 'Dark Mode', description: 'Enable dark theme', icon: 'moon' },
+            //{ key: 'darkMode', label: 'Dark Mode', description: 'Enable dark theme', icon: 'moon' },
             { key: 'autoSave', label: 'Auto Save', description: 'Automatically save changes', icon: 'save' },
             { key: 'notifications', label: 'Notifications', description: 'Receive app notifications', icon: 'bell' },
             { key: 'autoBackup', label: 'Auto Backup', description: 'Automatic data backup', icon: 'cloud' }
@@ -368,6 +424,16 @@ const SettingsTab = ({
             </Text>
           </View>
         </View>
+
+        {/* Logout Button */}
+        <TouchableOpacity
+          style={currentStyles.logoutButton}
+          onPress={handleLogout}
+          activeOpacity={0.8}
+        >
+          <Feather name="log-out" size={18} color="white" />
+          <Text style={currentStyles.logoutButtonText}>Logout</Text>
+        </TouchableOpacity>
       </ScrollView>
     </Animated.View>
   );
@@ -377,16 +443,16 @@ const SettingsTab = ({
 const styles = {
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#056e2dff',
   },
   scrollContainer: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#f7f3f3ff',
   },
   section: {
     backgroundColor: 'white',
     marginHorizontal: 16,
-    marginTop: 16,
+    marginTop: 15,
     borderRadius: 16,
     padding: 20,
     shadowColor: '#000',
@@ -407,10 +473,10 @@ const styles = {
     marginBottom: 8,
   },
   header: {
-    backgroundColor: '#2563EB',
+    backgroundColor: '#05790aff',
     paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 30,
+    paddingTop: 40,
+    paddingBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
     shadowColor: '#2563EB',
@@ -418,6 +484,7 @@ const styles = {
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
+    borderRadius: 25,
   },
   headerIconContainer: {
     width: 60,
@@ -443,9 +510,10 @@ const styles = {
     marginLeft: 12,
   },
   headerSubtext: {
-    fontSize: 16,
+    fontSize: 12,
     color: 'rgba(255, 255, 255, 0.8)',
     fontWeight: '400',
+    marginLeft: 15
   },
   card: {
     backgroundColor: 'white',
@@ -545,6 +613,28 @@ const styles = {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+    marginLeft: 8,
+  },
+  logoutButton: {
+    backgroundColor: '#ef4444',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 24,
+    marginBottom: 32,
+    marginHorizontal: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  logoutButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
     marginLeft: 8,
   },
   settingItem: {
@@ -752,6 +842,7 @@ const styles = {
   },
 };
 
+
 const darkStyles = {
   container: {
     backgroundColor: '#0F172A',
@@ -768,7 +859,7 @@ const darkStyles = {
     color: '#F1F5F9',
   },
   header: {
-    backgroundColor: '#1E293B',
+    backgroundColor: '#8e9197ff',
   },
   card: {
     backgroundColor: '#1E293B',

@@ -1,6 +1,5 @@
 // components/printPdf.js
-// components/printPdf.js
-import React, { useState } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,657 +7,896 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
-  Share,
   Linking,
   Image,
-  Dimensions
+  Dimensions,
+  ActivityIndicator,
+  Platform
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+// Removed expo-mail-composer dependency - using Linking API instead
 
 const { width } = Dimensions.get('window');
 
-export const PrintPdf = ({ visible, onClose, invoiceData, showToast }) => {
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [pdfUri, setPdfUri] = useState(null);
+// Constants
+const PDF_CONFIG = {
+  width: 595, // A4 width in points
+  height: 842, // A4 height in points
+  margins: 15 // mm
+};
 
-  // Convert image URI to base64
-  const convertImageToBase64 = async (imageUri) => {
-    if (!imageUri) return null;
+const CURRENCIES = [
+  { code: 'GHC', symbol: '₵', name: 'Ghana Cedi' },
+  { code: 'USD', symbol: '$', name: 'US Dollar' },
+  { code: 'EUR', symbol: '€', name: 'Euro' },
+  { code: 'GBP', symbol: '£', name: 'British Pound' },
+  { code: 'NGN', symbol: '₦', name: 'Nigerian Naira' },
+  { code: 'ZAR', symbol: 'R', name: 'South African Rand' }
+];
+
+// Invoice Themes Configuration
+const INVOICE_THEMES = {
+  modern: {
+    name: 'Modern Blue',
+    primary: '#2563eb',
+    secondary: '#f1f5f9',
+    accent: '#0f172a',
+    gradient: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+    type: 'standard'
+  },
+  elegant: {
+    name: 'Elegant Purple',
+    primary: '#7c3aed',
+    secondary: '#f8fafc',
+    accent: '#1e293b',
+    gradient: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+    type: 'standard'
+  },
+  corporate: {
+    name: 'Corporate Gray',
+    primary: '#374151',
+    secondary: '#f9fafb',
+    accent: '#111827',
+    gradient: 'linear-gradient(135deg, #374151 0%, #1f2937 100%)',
+    type: 'standard'
+  },
+  vibrant: {
+    name: 'Vibrant Green',
+    primary: '#059669',
+    secondary: '#f0fdfa',
+    accent: '#064e3b',
+    gradient: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+    type: 'standard'
+  },
+  warm: {
+    name: 'Warm Orange',
+    primary: '#ea580c',
+    secondary: '#fff7ed',
+    accent: '#9a3412',
+    gradient: 'linear-gradient(135deg, #ea580c 0%, #dc2626 100%)',
+    type: 'standard'
+  },
+  minimal: {
+    name: 'Minimal Black',
+    primary: '#000000',
+    secondary: '#ffffff',
+    accent: '#404040',
+    gradient: 'linear-gradient(135deg, #000000 0%, #404040 100%)',
+    type: 'standard'
+  },
+  thermal: {
+    name: 'Thermal Receipt',
+    primary: '#000000',
+    secondary: '#ffffff',
+    accent: '#000000',
+    gradient: 'none',
+    type: 'thermal'
+  }
+};
+
+// Utility Functions
+const validateImageUri = (uri) => {
+  if (!uri || typeof uri !== 'string') return false;
+  return uri.startsWith('data:image/') || uri.startsWith('file://') || uri.startsWith('http');
+};
+
+const convertImageToBase64 = async (imageUri) => {
+  if (!validateImageUri(imageUri)) return null;
+  
+  try {
+    if (imageUri.startsWith('data:image/')) {
+      return imageUri;
+    }
     
-    try {
-      // Check if it's already a base64 string
-      if (imageUri.startsWith('data:image/')) {
-        return imageUri;
-      }
-      
-      // Convert file URI to base64
-      const base64 = await FileSystem.readAsStringAsync(imageUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      
-      // Determine the image type from the URI
-      const imageType = imageUri.toLowerCase().includes('.png') ? 'png' : 'jpeg';
-      
-      return `data:image/${imageType};base64,${base64}`;
-    } catch (error) {
-      console.error('Error converting image to base64:', error);
+    const fileInfo = await FileSystem.getInfoAsync(imageUri);
+    if (!fileInfo.exists) {
+      console.warn('Image file does not exist:', imageUri);
       return null;
     }
-  };
+    
+    const base64 = await FileSystem.readAsStringAsync(imageUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    
+    const imageType = imageUri.toLowerCase().includes('.png') ? 'png' : 'jpeg';
+    return `data:image/${imageType};base64,${base64}`;
+  } catch (error) {
+    console.error('Error converting image to base64:', error);
+    return null;
+  }
+};
 
-  // Generate HTML content for PDF - Optimized for A4
-  const generateHtmlContent = async () => {
-    const {
-      documentType,
-      invoiceNumber,
-      date,
-      businessInfo,
-      customerInfo,
-      items,
-      taxRate,
-      notes,
-      businessLogo,
-      customerSignature,
-      subtotal,
-      tax,
-      total,
-      formatCurrency
-    } = invoiceData;
+const formatCurrency = (amount, currencyCode) => {
+  const currency = CURRENCIES.find(c => c.code === currencyCode) || CURRENCIES[0];
+  return `${currency.symbol}${Number(amount || 0).toFixed(2)}`;
+};
 
-    // Convert images to base64
-    const businessLogoBase64 = businessLogo ? await convertImageToBase64(businessLogo) : null;
-    const customerSignatureBase64 = customerSignature ? await convertImageToBase64(customerSignature) : null;
+const sanitizeText = (text) => {
+  if (!text) return '';
+  return String(text).replace(/[<>&"']/g, (match) => {
+    const entities = { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' };
+    return entities[match];
+  });
+};
 
+// CSS Styles for different themes
+const getCSS = (theme = 'modern') => {
+  const themeConfig = INVOICE_THEMES[theme] || INVOICE_THEMES.modern;
+  const isThermal = themeConfig.type === 'thermal';
+  
+  return `
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    @page {
+      size: ${isThermal ? '80mm 297mm' : 'A4'};
+      margin: ${isThermal ? '5mm' : PDF_CONFIG.margins + 'mm'};
+    }
+    
+    body {
+      font-family: ${isThermal ? "'Courier New', monospace" : "'Arial', 'Helvetica', sans-serif"};
+      font-size: ${isThermal ? '9px' : '11px'};
+      line-height: ${isThermal ? '1.2' : '1.4'};
+      color: ${themeConfig.accent};
+      width: ${isThermal ? '70mm' : '210mm'};
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 0;
+      background: white;
+    }
+    
+    .page-container {
+      width: 100%;
+      max-width: ${isThermal ? '70mm' : '180mm'};
+      margin: 0 auto;
+    }
+    
+    /* Theme-specific header styles */
+    .header {
+      display: ${isThermal ? 'block' : 'table'};
+      width: 100%;
+      margin-bottom: ${isThermal ? '10px' : '25px'};
+      position: relative;
+      overflow: hidden;
+      page-break-inside: avoid;
+      ${isThermal ? `
+        text-align: center;
+        border-bottom: 2px solid ${themeConfig.primary};
+        padding-bottom: 8px;
+      ` : theme === 'modern' ? `
+        background: ${themeConfig.gradient};
+        color: white;
+        padding: 20px;
+        border-radius: 8px;
+      ` : theme === 'elegant' ? `
+        border-bottom: 3px solid ${themeConfig.primary};
+        padding-bottom: 20px;
+        background: ${themeConfig.secondary};
+        padding: 20px;
+        border-radius: 4px;
+      ` : theme === 'vibrant' ? `
+        background: ${themeConfig.gradient};
+        color: white;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+      ` : theme === 'minimal' ? `
+        border-bottom: 4px solid ${themeConfig.primary};
+        padding-bottom: 15px;
+      ` : `
+        border-bottom: 2px solid ${themeConfig.primary};
+        padding-bottom: 15px;
+      `}
+    }
+    
+    .header::before {
+      ${theme === 'warm' && !isThermal ? `
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: ${themeConfig.gradient};
+      ` : ''}
+    }
+    
+    .header-left, .header-right {
+      display: ${isThermal ? 'block' : 'table-cell'};
+      width: ${isThermal ? '100%' : '50%'};
+      vertical-align: top;
+      text-align: ${isThermal ? 'center' : 'left'};
+    }
+    
+    .header-right {
+      text-align: ${isThermal ? 'center' : 'right'};
+      margin-top: ${isThermal ? '8px' : '0'};
+    }
+    
+    .business-logo {
+      max-width: ${isThermal ? '60px' : '120px'};
+      max-height: ${isThermal ? '30px' : '60px'};
+      object-fit: contain;
+      margin-bottom: ${isThermal ? '4px' : '10px'};
+      display: block;
+      ${isThermal ? 'margin-left: auto; margin-right: auto;' : ''}
+      /* Fixed logo visibility for all themes */
+      ${(theme === 'modern' || theme === 'vibrant') && !isThermal ? 
+        'filter: brightness(0) invert(1) drop-shadow(0 0 2px rgba(255,255,255,0.8));' : 
+        isThermal ? 'filter: contrast(1.2);' : 
+        'filter: contrast(1.1);'}
+    }
+    
+    .business-name {
+      font-size: ${isThermal ? '12px' : '18px'};
+      font-weight: bold;
+      margin-bottom: ${isThermal ? '2px' : '6px'};
+      ${isThermal ? `
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: ${themeConfig.primary};
+      ` : theme === 'modern' || theme === 'vibrant' ? 'color: white;' : `color: ${themeConfig.primary};`}
+    }
+    
+    .document-title {
+      font-size: ${isThermal ? '16px' : '28px'};
+      font-weight: bold;
+      margin-bottom: ${isThermal ? '2px' : '6px'};
+      ${isThermal ? `
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: ${themeConfig.primary};
+        border-bottom: 1px solid ${themeConfig.primary};
+        padding-bottom: 2px;
+      ` : theme === 'modern' || theme === 'vibrant' ? 'color: white;' : `color: ${themeConfig.primary};`}
+      ${theme === 'elegant' && !isThermal ? 'font-family: Georgia, serif;' : ''}
+    }
+    
+    .document-number {
+      font-size: ${isThermal ? '10px' : '16px'};
+      margin-bottom: ${isThermal ? '2px' : '4px'};
+      font-weight: 600;
+      ${isThermal ? `
+        color: ${themeConfig.accent};
+      ` : theme === 'modern' || theme === 'vibrant' ? 'color: rgba(255,255,255,0.9);' : `color: ${themeConfig.accent};`}
+    }
+    
+    .document-date, .document-generated {
+      font-size: ${isThermal ? '8px' : '12px'};
+      ${isThermal ? `
+        color: ${themeConfig.accent};
+      ` : theme === 'modern' || theme === 'vibrant' ? 'color: rgba(255,255,255,0.8);' : 'color: #718096;'}
+    }
+    
+    .party-info {
+      display: ${isThermal ? 'block' : 'table'};
+      width: 100%;
+      margin-bottom: ${isThermal ? '8px' : '25px'};
+      page-break-inside: avoid;
+    }
+    
+    .party-from, .party-to {
+      display: ${isThermal ? 'block' : 'table-cell'};
+      width: ${isThermal ? '100%' : '48%'};
+      vertical-align: top;
+      ${isThermal ? `
+        margin-bottom: 6px;
+        border-bottom: 1px dashed ${themeConfig.primary};
+        padding-bottom: 4px;
+      ` : theme === 'elegant' ? `
+        background: ${themeConfig.secondary};
+        padding: 15px;
+        border-radius: 6px;
+      ` : theme === 'warm' ? `
+        border-left: 4px solid ${themeConfig.primary};
+        padding-left: 15px;
+      ` : ''}
+    }
+    
+    .party-from {
+      padding-right: ${isThermal ? '0' : '4%'};
+    }
+    
+    .party-title {
+      font-size: ${isThermal ? '10px' : '14px'};
+      font-weight: bold;
+      color: ${themeConfig.primary};
+      margin-bottom: ${isThermal ? '2px' : '8px'};
+      padding-bottom: ${isThermal ? '1px' : '4px'};
+      ${isThermal ? `
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        border-bottom: 1px solid ${themeConfig.primary};
+      ` : theme === 'minimal' ? `
+        border-bottom: 2px solid ${themeConfig.primary};
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      ` : `border-bottom: 1px solid #e2e8f0;`}
+    }
+    
+    .party-name {
+      font-weight: bold;
+      font-size: ${isThermal ? '9px' : '13px'};
+      color: ${themeConfig.accent};
+      margin-bottom: ${isThermal ? '1px' : '4px'};
+    }
+    
+    .party-detail {
+      font-size: ${isThermal ? '8px' : '11px'};
+      color: #4a5568;
+      margin-bottom: ${isThermal ? '1px' : '2px'};
+      line-height: 1.3;
+    }
+    
+    .customer-id {
+      background: ${themeConfig.primary};
+      color: white;
+      padding: ${isThermal ? '1px 4px' : '4px 8px'};
+      border-radius: 4px;
+      font-size: ${isThermal ? '7px' : '10px'};
+      font-weight: 600;
+      display: inline-block;
+      margin-bottom: ${isThermal ? '2px' : '6px'};
+    }
+    
+    .items-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: ${isThermal ? '8px' : '10px'};
+      margin-bottom: ${isThermal ? '6px' : '20px'};
+      ${isThermal ? `
+        border-top: 1px solid ${themeConfig.primary};
+        border-bottom: 1px solid ${themeConfig.primary};
+      ` : theme === 'elegant' ? 'box-shadow: 0 2px 8px rgba(0,0,0,0.1);' : ''}
+      ${theme === 'vibrant' && !isThermal ? 'border-radius: 8px; overflow: hidden;' : ''}
+    }
+    
+    .items-table th {
+      background: ${isThermal ? 'white' : theme === 'minimal' ? '#f8f9fa' : themeConfig.primary};
+      color: ${isThermal ? themeConfig.accent : theme === 'minimal' ? themeConfig.accent : 'white'};
+      padding: ${isThermal ? '3px 2px' : '12px 8px'};
+      text-align: left;
+      font-weight: bold;
+      border: ${isThermal ? 'none' : `1px solid ${theme === 'minimal' ? '#cbd5e0' : themeConfig.primary}`};
+      border-bottom: ${isThermal ? `1px solid ${themeConfig.primary}` : 'inherit'};
+      font-size: ${isThermal ? '8px' : '11px'};
+      ${isThermal ? `
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      ` : ''}
+      ${theme === 'elegant' && !isThermal ? 'font-family: Georgia, serif;' : ''}
+    }
+    
+    .items-table td {
+      padding: ${isThermal ? '2px' : '8px'};
+      border: ${isThermal ? 'none' : '1px solid #e2e8f0'};
+      border-bottom: ${isThermal ? `1px dotted ${themeConfig.primary}` : 'inherit'};
+      vertical-align: top;
+      font-size: ${isThermal ? '8px' : '10px'};
+    }
+    
+    .items-table tr:nth-child(even) {
+      background-color: ${isThermal ? 'white' : themeConfig.secondary};
+    }
+    
+    .items-table tr:hover {
+      background-color: ${isThermal ? 'white' : `rgba(${theme === 'modern' ? '37, 99, 235' : theme === 'elegant' ? '124, 58, 237' : '5, 150, 105'}, 0.05)`};
+    }
+    
+    .col-description { width: ${isThermal ? '50%' : '45%'}; }
+    .col-quantity { width: ${isThermal ? '15%' : '12%'}; text-align: center; }
+    .col-price { width: ${isThermal ? '17%' : '18%'}; text-align: right; }
+    .col-total { width: ${isThermal ? '18%' : '18%'}; text-align: right; font-weight: 600; }
+    
+    .totals-wrapper {
+      display: ${isThermal ? 'block' : 'table'};
+      width: 100%;
+      margin-bottom: ${isThermal ? '6px' : '20px'};
+      ${isThermal ? `
+        border-top: 2px solid ${themeConfig.primary};
+        padding-top: 4px;
+      ` : ''}
+    }
+    
+    .totals-spacer {
+      display: ${isThermal ? 'none' : 'table-cell'};
+      width: 60%;
+    }
+    
+    .totals-section {
+      display: ${isThermal ? 'block' : 'table-cell'};
+      width: ${isThermal ? '100%' : '40%'};
+      vertical-align: top;
+      ${isThermal ? '' : theme === 'elegant' ? `
+        background: ${themeConfig.secondary};
+        padding: 15px;
+        border-radius: 8px;
+        border: 2px solid ${themeConfig.primary};
+      ` : theme === 'warm' ? `
+        background: linear-gradient(135deg, ${themeConfig.secondary} 0%, #fef3e2 100%);
+        padding: 15px;
+        border-radius: 8px;
+      ` : ''}
+    }
+    
+    .total-row {
+      display: ${isThermal ? 'flex' : 'table'};
+      width: 100%;
+      margin-bottom: ${isThermal ? '1px' : '4px'};
+      ${isThermal ? 'justify-content: space-between;' : ''}
+    }
+    
+    .total-label, .total-value {
+      display: ${isThermal ? 'inline' : 'table-cell'};
+      padding: ${isThermal ? '1px 0' : '6px 0'};
+      font-size: ${isThermal ? '8px' : '12px'};
+      color: #4a5568;
+    }
+    
+    .total-label {
+      padding-right: ${isThermal ? '4px' : '12px'};
+      ${isThermal ? 'font-weight: normal;' : ''}
+    }
+    
+    .total-value {
+      text-align: right;
+      color: ${themeConfig.accent};
+      font-weight: 600;
+      ${isThermal ? 'flex-shrink: 0;' : ''}
+    }
+    
+    .grand-total {
+      ${isThermal ? `
+        border-top: 2px solid ${themeConfig.primary};
+        border-bottom: 2px solid ${themeConfig.primary};
+        padding: 2px 0 !important;
+        margin-top: 2px;
+        font-weight: bold;
+      ` : theme === 'modern' ? `
+        background: ${themeConfig.gradient};
+        color: white;
+        border-radius: 6px;
+        margin-top: 8px;
+        padding: 0 12px !important;
+      ` : theme === 'vibrant' ? `
+        background: ${themeConfig.primary};
+        color: white;
+        border-radius: 6px;
+        margin-top: 8px;
+        padding: 0 12px !important;
+      ` : `
+        border-top: 3px solid ${themeConfig.primary};
+        border-bottom: 3px solid ${themeConfig.primary};
+        background-color: ${themeConfig.secondary};
+        margin-top: 8px;
+      `}
+    }
+    
+    .grand-total .total-label,
+    .grand-total .total-value {
+      font-weight: bold;
+      font-size: ${isThermal ? '10px' : '15px'};
+      padding: ${isThermal ? '2px 0' : '12px 0'};
+      ${isThermal ? `
+        color: ${themeConfig.primary};
+      ` : theme === 'modern' || theme === 'vibrant' ? 'color: white;' : `color: ${themeConfig.primary};`}
+    }
+    
+    .notes-section {
+      margin-bottom: ${isThermal ? '6px' : '25px'};
+      page-break-inside: avoid;
+      ${isThermal ? `
+        border-top: 1px dashed ${themeConfig.primary};
+        padding-top: 4px;
+      ` : theme === 'elegant' ? `
+        background: ${themeConfig.secondary};
+        padding: 20px;
+        border-radius: 8px;
+        border-left: 4px solid ${themeConfig.primary};
+      ` : ''}
+    }
+    
+    .notes-title {
+      font-size: ${isThermal ? '9px' : '14px'};
+      font-weight: bold;
+      color: ${themeConfig.primary};
+      margin-bottom: ${isThermal ? '2px' : '8px'};
+      ${isThermal ? 'text-transform: uppercase; letter-spacing: 1px;' : ''}
+      ${theme === 'minimal' && !isThermal ? 'text-transform: uppercase; letter-spacing: 1px;' : ''}
+    }
+    
+    .notes-content {
+      background-color: ${isThermal ? 'white' : theme === 'elegant' ? 'white' : themeConfig.secondary};
+      padding: ${isThermal ? '2px 0' : '12px'};
+      border-left: ${isThermal ? 'none' : `4px solid ${themeConfig.primary}`};
+      border-radius: ${isThermal ? '0' : '4px'};
+      font-size: ${isThermal ? '8px' : '11px'};
+      line-height: 1.5;
+      color: #4a5568;
+      ${theme === 'warm' && !isThermal ? `border: 1px solid ${themeConfig.primary}; border-left-width: 4px;` : ''}
+    }
+    
+    .signature-section {
+      display: ${isThermal ? 'block' : 'table'};
+      width: 100%;
+      margin-top: ${isThermal ? '8px' : '35px'};
+      page-break-inside: avoid;
+      ${isThermal ? `
+        border-top: 1px dashed ${themeConfig.primary};
+        padding-top: 4px;
+        text-align: center;
+      ` : ''}
+    }
+    
+    .signature-business, .signature-customer {
+      display: ${isThermal ? 'block' : 'table-cell'};
+      width: ${isThermal ? '100%' : '48%'};
+      vertical-align: bottom;
+      text-align: center;
+      ${isThermal ? `
+        margin-bottom: 4px;
+      ` : theme === 'elegant' ? `
+        background: ${themeConfig.secondary};
+        padding: 20px;
+        border-radius: 8px;
+      ` : ''}
+    }
+    
+    .signature-business {
+      padding-right: ${isThermal ? '0' : '4%'};
+    }
+    
+    .signature-customer {
+      padding-left: ${isThermal ? '0' : '4%'};
+    }
+    
+    .signature-line {
+      border-bottom: ${isThermal ? `1px solid ${themeConfig.primary}` : `2px solid ${themeConfig.primary}`};
+      height: ${isThermal ? '20px' : '50px'};
+      margin-bottom: ${isThermal ? '2px' : '8px'};
+      ${theme === 'modern' && !isThermal ? 'border-style: dashed;' : ''}
+    }
+    
+    .signature-image {
+      max-width: ${isThermal ? '80px' : '150px'};
+      max-height: ${isThermal ? '25px' : '50px'};
+      object-fit: contain;
+      border: ${isThermal ? `1px solid ${themeConfig.primary}` : `2px solid ${themeConfig.primary}`};
+      border-radius: 4px;
+      padding: ${isThermal ? '1px' : '4px'};
+      margin-bottom: ${isThermal ? '2px' : '8px'};
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    
+    .signature-label {
+      font-size: ${isThermal ? '7px' : '10px'};
+      color: ${themeConfig.primary};
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .footer {
+      text-align: center;
+      margin-top: ${isThermal ? '6px' : '30px'};
+      padding-top: ${isThermal ? '4px' : '20px'};
+      border-top: ${isThermal ? `1px solid ${themeConfig.primary}` : `2px solid ${themeConfig.primary}`};
+      page-break-inside: avoid;
+      ${isThermal ? '' : theme === 'warm' ? `
+        background: ${themeConfig.secondary};
+        padding: 20px;
+        border-radius: 8px;
+        border-top: 4px solid ${themeConfig.primary};
+      ` : ''}
+    }
+    
+    .footer-thank-you {
+      font-weight: bold;
+      font-size: ${isThermal ? '9px' : '14px'};
+      color: ${themeConfig.primary};
+      margin-bottom: ${isThermal ? '2px' : '6px'};
+      ${isThermal ? 'text-transform: uppercase; letter-spacing: 1px;' : ''}
+      ${theme === 'elegant' && !isThermal ? 'font-family: Georgia, serif;' : ''}
+    }
+    
+    .footer-info {
+      font-size: ${isThermal ? '7px' : '10px'};
+      color: #718096;
+    }
+    
+    .footer-ref {
+      font-weight: 600;
+      color: ${themeConfig.accent};
+      margin-top: ${isThermal ? '1px' : '4px'};
+    }
+    
+    /* Thermal receipt specific styles */
+    ${isThermal ? `
+      .thermal-divider {
+        text-align: center;
+        margin: 4px 0;
+        font-size: 12px;
+        font-weight: bold;
+      }
+      
+      .thermal-divider::before,
+      .thermal-divider::after {
+        content: '====';
+        margin: 0 4px;
+      }
+    ` : ''}
+    
+    @media print {
+      body {
+        font-size: ${isThermal ? '8px' : '10px'};
+        margin: 0;
+        padding: 0;
+        ${isThermal ? 'width: 80mm;' : ''}
+      }
+      
+      .page-container {
+        max-width: none;
+        width: 100%;
+      }
+      
+      .no-print {
+        display: none !important;
+      }
+      
+      .page-break {
+        page-break-before: always;
+      }
+      
+      .avoid-break {
+        page-break-inside: avoid;
+      }
+      
+      /* Ensure logo visibility in print */
+      .business-logo {
+        -webkit-print-color-adjust: exact !important;
+        color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+    }
+    
+    .items-table tbody tr {
+      page-break-inside: avoid;
+    }
+    
+    .items-table thead {
+      display: table-header-group;
+    }
+  `;
+};
+
+ 
+
+// Generate HTML content for PDF with theme support
+const generateHtmlContent = async (invoiceData, theme = 'modern') => {
+  const {
+    documentType = 'Invoice',
+    invoiceNumber = '',
+    date = new Date().toLocaleDateString(),
+    businessInfo = {},
+    customerInfo = {},
+    items = [],
+    TaxRate = 0,
+    notes = '',
+    businessLogo,
+    customerSignature,
+    subtotal = 0,
+    tax = 0,
+    total = 0,
+    currency = 'USD'
+  } = invoiceData;
+
+  const currentDate = new Date();
+  const generatedDate = currentDate.toLocaleDateString();
+  const generatedTime = currentDate.toLocaleTimeString();
+  const generatedDateTime = currentDate.toLocaleString();
+  
+  const customerName = customerInfo.name || 'Customer';
+  const customerInitials = customerName.split(' ').map(name => name.charAt(0)).join('').toUpperCase();
+  const enhancedInvoiceNumber = invoiceNumber || `${documentType.toUpperCase()}-${customerInitials}-${Date.now()}`;
+
+  const [businessLogoBase64, customerSignatureBase64] = await Promise.all([
+    businessLogo ? convertImageToBase64(businessLogo) : null,
+    customerSignature ? convertImageToBase64(customerSignature) : null
+  ]);
+
+  const formatCurrencyValue = (amount) => formatCurrency(amount, currency);
+
+  const itemsHtml = items.map(item => {
+    const itemTotal = (parseFloat(item.quantity || 0) * parseFloat(item.price || 0));
     return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${documentType.toUpperCase()} ${invoiceNumber}</title>
-      <style>
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-        
-        @page {
-          size: A4;
-          margin: 15mm;
-        }
-        
-        body {
-          font-family: 'Arial', 'Helvetica', sans-serif;
-          font-size: 11px;
-          line-height: 1.3;
-          color: #2d3748;
-          width: 210mm;
-          min-height: 297mm;
-          margin: 0 auto;
-          padding: 0;
-          background: white;
-        }
-        
-        .page-container {
-          width: 100%;
-          max-width: 180mm;
-          margin: 0 auto;
-        }
-        
-        /* Header Section */
-        .header {
-          display: table;
-          width: 100%;
-          margin-bottom: 20px;
-          border-bottom: 2px solid #2563eb;
-          padding-bottom: 15px;
-          page-break-inside: avoid;
-        }
-        
-        .header-left {
-          display: table-cell;
-          width: 50%;
-          vertical-align: top;
-        }
-        
-        .header-right {
-          display: table-cell;
-          width: 50%;
-          vertical-align: top;
-          text-align: right;
-        }
-        
-        .business-logo {
-          max-width: 120px;
-          max-height: 60px;
-          object-fit: contain;
-          margin-bottom: 8px;
-          display: block;
-        }
-        
-        .business-name {
-          font-size: 16px;
-          font-weight: bold;
-          color: #1a202c;
-          margin-bottom: 4px;
-        }
-        
-        .document-title {
-          font-size: 24px;
-          font-weight: bold;
-          color: #2563eb;
-          margin-bottom: 4px;
-        }
-        
-        .document-number {
-          font-size: 14px;
-          color: #4a5568;
-          margin-bottom: 2px;
-        }
-        
-        .document-date {
-          font-size: 11px;
-          color: #718096;
-        }
-        
-        /* Party Information */
-        .party-info {
-          display: table;
-          width: 100%;
-          margin-bottom: 20px;
-          page-break-inside: avoid;
-        }
-        
-        .party-from {
-          display: table-cell;
-          width: 48%;
-          vertical-align: top;
-          padding-right: 4%;
-        }
-        
-        .party-to {
-          display: table-cell;
-          width: 48%;
-          vertical-align: top;
-        }
-        
-        .party-title {
-          font-size: 12px;
-          font-weight: bold;
-          color: #2563eb;
-          margin-bottom: 6px;
-          padding-bottom: 3px;
-          border-bottom: 1px solid #e2e8f0;
-        }
-        
-        .party-name {
-          font-weight: bold;
-          font-size: 12px;
-          color: #1a202c;
-          margin-bottom: 3px;
-        }
-        
-        .party-detail {
-          font-size: 10px;
-          color: #4a5568;
-          margin-bottom: 2px;
-          line-height: 1.2;
-        }
-        
-        /* Items Table */
-        .items-section {
-          margin-bottom: 15px;
-          page-break-inside: avoid;
-        }
-        
-        .items-table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 10px;
-        }
-        
-        .items-table th {
-          background-color: #f7fafc;
-          padding: 8px 6px;
-          text-align: left;
-          font-weight: bold;
-          border: 1px solid #cbd5e0;
-          color: #2d3748;
-          font-size: 10px;
-        }
-        
-        .items-table td {
-          padding: 6px;
-          border: 1px solid #e2e8f0;
-          vertical-align: top;
-          font-size: 10px;
-        }
-        
-        .items-table tr:nth-child(even) {
-          background-color: #f8f9fa;
-        }
-        
-        .col-description { width: 45%; }
-        .col-quantity { width: 12%; text-align: center; }
-        .col-price { width: 18%; text-align: right; }
-        .col-total { width: 18%; text-align: right; }
-        
-        /* Totals Section */
-        .totals-wrapper {
-          display: table;
-          width: 100%;
-          margin-bottom: 15px;
-        }
-        
-        .totals-spacer {
-          display: table-cell;
-          width: 60%;
-        }
-        
-        .totals-section {
-          display: table-cell;
-          width: 40%;
-          vertical-align: top;
-        }
-        
-        .total-row {
-          display: table;
-          width: 100%;
-          margin-bottom: 3px;
-        }
-        
-        .total-label {
-          display: table-cell;
-          padding: 4px 8px 4px 0;
-          font-size: 11px;
-          color: #4a5568;
-        }
-        
-        .total-value {
-          display: table-cell;
-          text-align: right;
-          padding: 4px 0;
-          font-size: 11px;
-          color: #2d3748;
-        }
-        
-        .grand-total {
-          border-top: 2px solid #2563eb;
-          border-bottom: 2px solid #2563eb;
-          background-color: #f7fafc;
-          margin-top: 6px;
-        }
-        
-        .grand-total .total-label,
-        .grand-total .total-value {
-          font-weight: bold;
-          font-size: 13px;
-          padding: 8px 8px 8px 0;
-          color: #1a202c;
-        }
-        
-        .grand-total .total-value {
-          padding-right: 0;
-        }
-        
-        /* Notes Section */
-        .notes-section {
-          margin-bottom: 20px;
-          page-break-inside: avoid;
-        }
-        
-        .notes-title {
-          font-size: 12px;
-          font-weight: bold;
-          color: #2563eb;
-          margin-bottom: 6px;
-        }
-        
-        .notes-content {
-          background-color: #f8f9fa;
-          padding: 10px;
-          border-left: 3px solid #2563eb;
-          border-radius: 3px;
-          font-size: 10px;
-          line-height: 1.4;
-          color: #4a5568;
-        }
-        
-        /* Signature Section */
-        .signature-section {
-          display: table;
-          width: 100%;
-          margin-top: 30px;
-          page-break-inside: avoid;
-        }
-        
-        .signature-business {
-          display: table-cell;
-          width: 48%;
-          vertical-align: bottom;
-          text-align: center;
-          padding-right: 4%;
-        }
-        
-        .signature-customer {
-          display: table-cell;
-          width: 48%;
-          vertical-align: bottom;
-          text-align: center;
-        }
-        
-        .signature-line {
-          border-bottom: 1px solid #4a5568;
-          height: 40px;
-          margin-bottom: 6px;
-        }
-        
-        .signature-image {
-          max-width: 140px;
-          max-height: 40px;
-          object-fit: contain;
-          border: 1px solid #e2e8f0;
-          margin-bottom: 6px;
-          display: block;
-          margin-left: auto;
-          margin-right: auto;
-        }
-        
-        .signature-label {
-          font-size: 9px;
-          color: #718096;
-          font-weight: 500;
-        }
-        
-        /* Footer */
-        .footer {
-          text-align: center;
-          margin-top: 25px;
-          padding-top: 15px;
-          border-top: 1px solid #e2e8f0;
-          font-size: 9px;
-          color: #718096;
-          page-break-inside: avoid;
-        }
-        
-        .footer-thank-you {
-          font-weight: 500;
-          margin-bottom: 3px;
-        }
-        
-        /* Print Specific Styles */
-        @media print {
-          body {
-            font-size: 10px;
-            margin: 0;
-            padding: 0;
-          }
-          
-          .page-container {
-            max-width: none;
-            width: 100%;
-          }
-          
-          .no-print {
-            display: none !important;
-          }
-          
-          .page-break {
-            page-break-before: always;
-          }
-          
-          .avoid-break {
-            page-break-inside: avoid;
-          }
-        }
-        
-        /* Responsive adjustments for very long content */
-        .items-table tbody tr {
-          page-break-inside: avoid;
-        }
-        
-        .items-table thead {
-          display: table-header-group;
-        }
-        
-        /* Ensure consistent spacing */
-        .section-spacing {
-          margin-bottom: 15px;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="page-container">
-        <!-- Header Section -->
-        <div class="header avoid-break">
-          <div class="header-left">
-            ${businessLogoBase64 ? `<img src="${businessLogoBase64}" alt="Business Logo" class="business-logo">` : ''}
-            <div class="business-name">${businessInfo.name}</div>
-          </div>
-          <div class="header-right">
-            <div class="document-title">${documentType.toUpperCase()}</div>
-            <div class="document-number">${invoiceNumber}</div>
-            <div class="document-date">Date: ${date}</div>
-          </div>
+      <tr>
+        <td class="col-description">${sanitizeText(item.description)}</td>
+        <td class="col-quantity">${sanitizeText(item.quantity)}</td>
+        <td class="col-price">${formatCurrencyValue(parseFloat(item.price || 0))}</td>
+        <td class="col-total">${formatCurrencyValue(itemTotal)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${sanitizeText(documentType.toUpperCase())} ${sanitizeText(invoiceNumber)}</title>
+    <style>${getCSS(theme)}</style>
+  </head>
+  <body>
+    <div class="page-container">
+      <div class="header avoid-break">
+        <div class="header-left">
+          ${businessLogoBase64 ? `<img src="${businessLogoBase64}" alt="Business Logo" class="business-logo">` : ''}
+          <div class="business-name">${sanitizeText(businessInfo.name || '')}</div>
         </div>
-        
-        <!-- Party Information -->
-        <div class="party-info avoid-break section-spacing">
-          <div class="party-from">
-            <div class="party-title">From:</div>
-            <div class="party-name">${businessInfo.name}</div>
-            ${businessInfo.address ? `<div class="party-detail">${businessInfo.address}</div>` : ''}
-            ${businessInfo.phone ? `<div class="party-detail">Phone: ${businessInfo.phone}</div>` : ''}
-            ${businessInfo.email ? `<div class="party-detail">Email: ${businessInfo.email}</div>` : ''}
-            ${businessInfo.taxId ? `<div class="party-detail">Tax ID: ${businessInfo.taxId}</div>` : ''}
-          </div>
-          
-          <div class="party-to">
-            <div class="party-title">To:</div>
-            <div class="party-name">${customerInfo.name}</div>
-            ${customerInfo.address ? `<div class="party-detail">${customerInfo.address}</div>` : ''}
-            ${customerInfo.phone ? `<div class="party-detail">Phone: ${customerInfo.phone}</div>` : ''}
-            ${customerInfo.email ? `<div class="party-detail">Email: ${customerInfo.email}</div>` : ''}
-          </div>
-        </div>
-        
-        <!-- Items Table -->
-        <div class="items-section section-spacing">
-          <table class="items-table">
-            <thead>
-              <tr>
-                <th class="col-description">Description</th>
-                <th class="col-quantity">Qty</th>
-                <th class="col-price">Unit Price</th>
-                <th class="col-total">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${items.map(item => `
-                <tr>
-                  <td class="col-description">${item.description}</td>
-                  <td class="col-quantity">${item.quantity}</td>
-                  <td class="col-price">${formatCurrency(parseFloat(item.price || 0))}</td>
-                  <td class="col-total">${formatCurrency(parseFloat(item.quantity || 0) * parseFloat(item.price || 0))}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        
-        <!-- Totals Section -->
-        <div class="totals-wrapper section-spacing">
-          <div class="totals-spacer"></div>
-          <div class="totals-section">
-            <div class="total-row">
-              <div class="total-label">Subtotal:</div>
-              <div class="total-value">${formatCurrency(subtotal)}</div>
-            </div>
-            <div class="total-row">
-              <div class="total-label">Tax (${taxRate}%):</div>
-              <div class="total-value">${formatCurrency(tax)}</div>
-            </div>
-            <div class="total-row grand-total">
-              <div class="total-label">TOTAL:</div>
-              <div class="total-value">${formatCurrency(total)}</div>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Notes Section -->
-        ${notes ? `
-          <div class="notes-section section-spacing avoid-break">
-            <div class="notes-title">Notes:</div>
-            <div class="notes-content">${notes}</div>
-          </div>
-        ` : ''}
-        
-        <!-- Signature Section -->
-        <div class="signature-section avoid-break">
-          <div class="signature-business">
-            <div class="signature-line"></div>
-            <div class="signature-label">Business Signature</div>
-          </div>
-          
-          <div class="signature-customer">
-            ${customerSignatureBase64 ? 
-              `<img src="${customerSignatureBase64}" alt="Customer Signature" class="signature-image">` : 
-              `<div class="signature-line"></div>`
-            }
-            <div class="signature-label">Customer Signature</div>
-          </div>
-        </div>
-        
-        <!-- Footer -->
-        <div class="footer avoid-break">
-          <div class="footer-thank-you">Thank you for your business!</div>
-          <div>Generated on ${new Date().toLocaleDateString()}</div>
+        <div class="header-right">
+          <div class="document-title">${sanitizeText(documentType.toUpperCase())}</div>
+          <div class="document-number">${sanitizeText(enhancedInvoiceNumber)}</div>
+          <div class="document-date">Issue Date: ${sanitizeText(date)}</div>
+          <div class="document-generated">Generated: ${sanitizeText(generatedDateTime)}</div>
         </div>
       </div>
-    </body>
-    </html>
-    `;
-  };
+      
+      <div class="party-info avoid-break">
+        <div class="party-from">
+          <div class="party-title">From:</div>
+          <div class="party-name">${sanitizeText(businessInfo.name || '')}</div>
+          ${businessInfo.address ? `<div class="party-detail">${sanitizeText(businessInfo.address)}</div>` : ''}
+          ${businessInfo.phone ? `<div class="party-detail">Phone: ${sanitizeText(businessInfo.phone)}</div>` : ''}
+          ${businessInfo.email ? `<div class="party-detail">Email: ${sanitizeText(businessInfo.email)}</div>` : ''}
+          ${businessInfo.taxId ? `<div class="party-detail">Tax ID: ${sanitizeText(businessInfo.taxId)}</div>` : ''}
+        </div>
+        
+        <div class="party-to">
+          <div class="party-title">To:</div>
+          <div class="party-name">${sanitizeText(customerInfo.name || '')}</div>
+          <div class="party-detail customer-id">Customer ID: ${sanitizeText(customerInitials)}-${Date.now().toString().slice(-6)}</div>
+          ${customerInfo.address ? `<div class="party-detail">${sanitizeText(customerInfo.address)}</div>` : ''}
+          ${customerInfo.phone ? `<div class="party-detail">Phone: ${sanitizeText(customerInfo.phone)}</div>` : ''}
+          ${customerInfo.email ? `<div class="party-detail">Email: ${sanitizeText(customerInfo.email)}</div>` : ''}
+        </div>
+      </div>
+      
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th class="col-description">Description</th>
+            <th class="col-quantity">Qty</th>
+            <th class="col-price">Unit Price</th>
+            <th class="col-total">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemsHtml}
+        </tbody>
+      </table>
+      
+      <div class="totals-wrapper">
+        <div class="totals-spacer"></div>
+        <div class="totals-section">
+          <div class="total-row">
+            <div class="total-label">Subtotal:</div>
+            <div class="total-value">${formatCurrencyValue(subtotal)}</div>
+          </div>
+          <div class="total-row">
+            <div class="total-label">Tax (${TaxRate}%):</div>
+            <div class="total-value">${formatCurrencyValue(tax)}</div>
+          </div>
+          <div class="total-row grand-total">
+            <div class="total-label">TOTAL:</div>
+            <div class="total-value">${formatCurrencyValue(total)}</div>
+          </div>
+        </div>
+      </div>
+      
+      ${notes ? `
+        <div class="notes-section avoid-break">
+          <div class="notes-title">Notes:</div>
+          <div class="notes-content">${sanitizeText(notes)}</div>
+        </div>
+      ` : ''}
+      
+      <div class="signature-section avoid-break">
+        <div class="signature-business">
+          <div class="signature-line"></div>
+          <div class="signature-label">Customer Signature</div>
+        </div>
+        
+        <div class="signature-customer">
+          ${customerSignatureBase64 ? 
+            `<img src="${customerSignatureBase64}" alt="Business Signature" class="signature-image">` : 
+            `<div class="signature-line"></div>`
+          }
+          <div class="signature-label">Business Signature</div>
+        </div>
+      </div>
+      
+      <div class="footer avoid-break">
+        <div class="footer-thank-you">Thank you for doing business with us!</div>
+        <div class="footer-info">
+          <div>Generated on ${generatedDate} at ${generatedTime}</div>
+          <div class="footer-ref">Reference: ${sanitizeText(enhancedInvoiceNumber)}</div>
+        </div>
+      </div>
+    </div>
+  </body>
+  </html>
+  `;
+};
 
-  // Generate PDF
-  const generatePDF = async () => {
-    try {
-      setIsGenerating(true);
-      
-      const htmlContent = await generateHtmlContent(); // Now it's async
-      
-      const { uri } = await Print.printToFileAsync({
-        html: htmlContent,
-        base64: false,
-        width: 595, // A4 width in points
-        height: 842  // A4 height in points
-      });
-      
-      setPdfUri(uri);
-      showToast('PDF generated successfully!', 'success');
-      return uri;
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      showToast('Failed to generate PDF', 'error');
-      return null;
-    } finally {
-      setIsGenerating(false);
+// Enhanced PDF generation function with theme support
+export const generateInvoicePdf = async (invoiceData, theme = 'modern') => {
+  try {
+    if (!invoiceData) {
+      throw new Error('Invoice data is required');
     }
-  };
 
-  // Print PDF
-  const handlePrint = async () => {
-    try {
-      const htmlContent = await generateHtmlContent(); // Now it's async
-      
-      await Print.printAsync({
-        html: htmlContent,
-        printerUrl: undefined // Let user select printer
-      });
-      
-      showToast('Document sent to printer', 'success');
-    } catch (error) {
-      console.error('Print error:', error);
-      showToast('Failed to print document', 'error');
-    }
-  };
+    const htmlContent = await generateHtmlContent(invoiceData, theme);
+    
+    const { uri } = await Print.printToFileAsync({
+      html: htmlContent,
+      base64: false,
+      width: PDF_CONFIG.width,
+      height: PDF_CONFIG.height
+    });
+    
+    const timestamp = Date.now();
+    const customerName = invoiceData.customerInfo?.name || 'Customer';
+    const customerInitials = customerName.split(' ').map(name => name.charAt(0)).join('').toUpperCase();
+    const enhancedInvoiceNumber = invoiceData.invoiceNumber || `${invoiceData.documentType || 'DOC'}-${customerInitials}-${timestamp}`;
+    
+    const filename = `${enhancedInvoiceNumber}_${theme}_${new Date().toISOString().split('T')[0]}.pdf`;
+    const permanentUri = `${FileSystem.documentDirectory}${filename}`;
+    
+    await FileSystem.moveAsync({
+      from: uri,
+      to: permanentUri
+    });
 
-  // Share PDF
-  const handleShare = async () => {
-    try {
-      let uri = pdfUri;
-      
-      if (!uri) {
-        uri = await generatePDF();
-        if (!uri) return;
-      }
-      
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: `Share ${invoiceData.documentType} ${invoiceData.invoiceNumber}`
-        });
-      } else {
-        showToast('Sharing not available on this device', 'error');
-      }
-    } catch (error) {
-      console.error('Share error:', error);
-      showToast('Failed to share PDF', 'error');
-    }
-  };
+    console.log('PDF generated successfully at:', permanentUri);
+    return permanentUri;
 
-  // Save PDF to device
-  const handleSave = async () => {
-    try {
-      let uri = pdfUri;
-      
-      if (!uri) {
-        uri = await generatePDF();
-        if (!uri) return;
-      }
-      
-      const filename = `${invoiceData.documentType}_${invoiceData.invoiceNumber}_${Date.now()}.pdf`;
-      const documentDirectory = FileSystem.documentDirectory;
-      const newUri = documentDirectory + filename;
-      
-      await FileSystem.copyAsync({
-        from: uri,
-        to: newUri
-      });
-      
-      showToast('PDF saved to device storage', 'success');
-    } catch (error) {
-      console.error('Save error:', error);
-      showToast('Failed to save PDF', 'error');
-    }
-  };
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    throw new Error(`Failed to generate PDF: ${error.message}`);
+  }
+};
 
-  // Email PDF
-  const handleEmail = async () => {
-    try {
-      let uri = pdfUri;
-      
-      if (!uri) {
-        uri = await generatePDF();
-        if (!uri) return;
-      }
-      
-      const subject = `${invoiceData.documentType.toUpperCase()} ${invoiceData.invoiceNumber}`;
-      const body = `Please find attached ${invoiceData.documentType} ${invoiceData.invoiceNumber}.`;
-      
-      const mailtoLink = `mailto:${invoiceData.customerInfo.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      
-      await Linking.openURL(mailtoLink);
-    } catch (error) {
-      console.error('Email error:', error);
-      showToast('Failed to open email app', 'error');
-    }
-  };
-
+// Theme Selector Component
+const ThemeSelector = ({ selectedTheme, onThemeChange, visible, onClose }) => {
   return (
     <Modal
       visible={visible}
@@ -666,178 +904,622 @@ export const PrintPdf = ({ visible, onClose, invoiceData, showToast }) => {
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <Feather name="x" size={24} color="#374151" />
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>
-              {invoiceData.documentType.toUpperCase()} Preview
-            </Text>
-          </View>
+      <View style={styles.themeModalContainer}>
+        <View style={styles.themeHeader}>
+          <Text style={styles.themeHeaderTitle}>Choose Invoice Theme</Text>
+          <TouchableOpacity onPress={onClose} style={styles.themeCloseButton}>
+            <Feather name="x" size={24} color="#374151" />
+          </TouchableOpacity>
         </View>
-
-        {/* PDF Preview Content */}
-        <ScrollView style={styles.previewContainer}>
-          <View style={styles.previewContent}>
-            {/* Document Header */}
-            <View style={styles.documentHeader}>
-              <View style={styles.logoSection}>
-                {invoiceData.businessLogo && (
-                  <Image 
-                    source={{ uri: invoiceData.businessLogo }} 
-                    style={styles.businessLogo}
-                    resizeMode="contain"
-                  />
-                )}
-                <Text style={styles.businessName}>{invoiceData.businessInfo.name}</Text>
-              </View>
-              <View style={styles.documentInfo}>
-                <Text style={styles.documentTitle}>
-                  {invoiceData.documentType.toUpperCase()}
-                </Text>
-                <Text style={styles.documentNumber}>{invoiceData.invoiceNumber}</Text>
-                <Text style={styles.documentDate}>Date: {invoiceData.date}</Text>
-              </View>
-            </View>
-
-            {/* Party Information */}
-            <View style={styles.partyInfo}>
-              <View style={styles.partySection}>
-                <Text style={styles.partyTitle}>From:</Text>
-                <Text style={styles.partyName}>{invoiceData.businessInfo.name}</Text>
-                {invoiceData.businessInfo.address && (
-                  <Text style={styles.partyDetail}>{invoiceData.businessInfo.address}</Text>
-                )}
-                {invoiceData.businessInfo.phone && (
-                  <Text style={styles.partyDetail}>Phone: {invoiceData.businessInfo.phone}</Text>
-                )}
-                {invoiceData.businessInfo.email && (
-                  <Text style={styles.partyDetail}>Email: {invoiceData.businessInfo.email}</Text>
-                )}
-              </View>
-              
-              <View style={styles.partySection}>
-                <Text style={styles.partyTitle}>To:</Text>
-                <Text style={styles.partyName}>{invoiceData.customerInfo.name}</Text>
-                {invoiceData.customerInfo.address && (
-                  <Text style={styles.partyDetail}>{invoiceData.customerInfo.address}</Text>
-                )}
-                {invoiceData.customerInfo.phone && (
-                  <Text style={styles.partyDetail}>Phone: {invoiceData.customerInfo.phone}</Text>
-                )}
-                {invoiceData.customerInfo.email && (
-                  <Text style={styles.partyDetail}>Email: {invoiceData.customerInfo.email}</Text>
-                )}
-              </View>
-            </View>
-
-            {/* Items Table */}
-            <View style={styles.itemsTable}>
-              <View style={styles.tableHeader}>
-                <Text style={[styles.tableHeaderText, { flex: 2 }]}>Description</Text>
-                <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>Qty</Text>
-                <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'right' }]}>Price</Text>
-                <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'right' }]}>Total</Text>
-              </View>
-              
-              {invoiceData.items.map((item, index) => (
-                <View key={index} style={styles.tableRow}>
-                  <Text style={[styles.tableCell, { flex: 2 }]}>{item.description}</Text>
-                  <Text style={[styles.tableCell, { flex: 1, textAlign: 'center' }]}>{item.quantity}</Text>
-                  <Text style={[styles.tableCell, { flex: 1, textAlign: 'right' }]}>
-                    {invoiceData.formatCurrency(parseFloat(item.price || 0))}
-                  </Text>
-                  <Text style={[styles.tableCell, { flex: 1, textAlign: 'right' }]}>
-                    {invoiceData.formatCurrency(parseFloat(item.quantity || 0) * parseFloat(item.price || 0))}
+        
+        <ScrollView style={styles.themeScrollContainer}>
+          {Object.entries(INVOICE_THEMES).map(([key, theme]) => (
+            <TouchableOpacity
+              key={key}
+              style={[
+                styles.themeOption,
+                selectedTheme === key && styles.themeOptionSelected,
+                { borderColor: theme.primary }
+              ]}
+              onPress={() => {
+                onThemeChange(key);
+                onClose();
+              }}
+            >
+              <View style={styles.themePreview}>
+                <View style={[styles.themeColorBar, { backgroundColor: theme.primary }]} />
+                <View style={styles.themeInfo}>
+                  <Text style={styles.themeOptionName}>{theme.name}</Text>
+                  <Text style={styles.themeOptionDescription}>
+                    {key === 'modern' ? 'Clean and professional with blue accents' :
+                     key === 'elegant' ? 'Sophisticated purple design with serif fonts' :
+                     key === 'corporate' ? 'Traditional gray business theme' :
+                     key === 'vibrant' ? 'Fresh green theme with modern styling' :
+                     key === 'warm' ? 'Friendly orange design with rounded elements' :
+                     'Minimalist black and white design'}
                   </Text>
                 </View>
-              ))}
-            </View>
-
-            {/* Totals */}
-            <View style={styles.totalsSection}>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Subtotal:</Text>
-                <Text style={styles.totalValue}>{invoiceData.formatCurrency(invoiceData.subtotal)}</Text>
               </View>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Tax ({invoiceData.taxRate}%):</Text>
-                <Text style={styles.totalValue}>{invoiceData.formatCurrency(invoiceData.tax)}</Text>
-              </View>
-              <View style={[styles.totalRow, styles.grandTotal]}>
-                <Text style={styles.grandTotalLabel}>TOTAL:</Text>
-                <Text style={styles.grandTotalValue}>{invoiceData.formatCurrency(invoiceData.total)}</Text>
-              </View>
-            </View>
-
-            {/* Notes */}
-            {invoiceData.notes && (
-              <View style={styles.notesSection}>
-                <Text style={styles.notesTitle}>Notes:</Text>
-                <Text style={styles.notesContent}>{invoiceData.notes}</Text>
-              </View>
-            )}
-
-            {/* Signature */}
-            {invoiceData.customerSignature && (
-              <View style={styles.signatureSection}>
-                <Text style={styles.signatureTitle}>Customer Signature:</Text>
-                <Image 
-                  source={{ uri: invoiceData.customerSignature }} 
-                  style={styles.signatureImage}
-                  resizeMode="contain"
-                />
-              </View>
-            )}
-          </View>
+              {selectedTheme === key && (
+                <Feather name="check-circle" size={24} color={theme.primary} />
+              )}
+            </TouchableOpacity>
+          ))}
         </ScrollView>
-
-        {/* Action Buttons */}
-        <View style={styles.actionBar}>
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: '#059669' }]}
-            onPress={handlePrint}
-            disabled={isGenerating}
-          >
-            <Feather name="printer" size={16} color="white" />
-            <Text style={styles.actionButtonText}>Print</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: '#2563eb' }]}
-            onPress={handleShare}
-            disabled={isGenerating}
-          >
-            <Feather name="share" size={16} color="white" />
-            <Text style={styles.actionButtonText}>Share</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: '#ea580c' }]}
-            onPress={handleSave}
-            disabled={isGenerating}
-          >
-            <Feather name="download" size={16} color="white" />
-            <Text style={styles.actionButtonText}>Save</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: '#7c3aed' }]}
-            onPress={handleEmail}
-            disabled={isGenerating}
-          >
-            <Feather name="mail" size={16} color="white" />
-            <Text style={styles.actionButtonText}>Email</Text>
-          </TouchableOpacity>
-        </View>
       </View>
     </Modal>
   );
 };
 
+// Main PrintPdf Component with Enhanced Features
+export const PrintPdf = ({ 
+  visible, 
+  onClose, 
+  invoiceData, 
+  showToast,
+  onError 
+}) => {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [pdfUri, setPdfUri] = useState(null);
+  const [selectedTheme, setSelectedTheme] = useState('modern');
+  const [showThemeSelector, setShowThemeSelector] = useState(false);
+
+  // Memoized currency formatter
+  const currencyFormatter = useMemo(() => {
+    return (amount) => formatCurrency(amount, invoiceData?.currency || 'USD');
+  }, [invoiceData?.currency]);
+
+  // Generate PDF with selected theme
+  const generatePDF = useCallback(async (theme = selectedTheme) => {
+    if (!invoiceData) {
+      showToast?.('Invoice data is missing', 'error');
+      return null;
+    }
+
+    try {
+      setIsGenerating(true);
+      const uri = await generateInvoicePdf(invoiceData, theme);
+      setPdfUri(uri);
+      showToast?.(`PDF generated with ${INVOICE_THEMES[theme].name} theme!`, 'success');
+      return uri;
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      const errorMessage = error.message || 'Failed to generate PDF';
+      showToast?.(errorMessage, 'error');
+      onError?.(error);
+      return null;
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [invoiceData, selectedTheme, showToast, onError]);
+
+  // Handle theme change
+  const handleThemeChange = useCallback((theme) => {
+    setSelectedTheme(theme);
+    setPdfUri(null); // Reset PDF URI to force regeneration
+  }, []);
+
+  // Handle actions
+  const handlePrint = useCallback(async () => {
+    try {
+      const htmlContent = await generateHtmlContent(invoiceData, selectedTheme);
+      
+      let selectedPrinter = undefined;
+      if (Platform.OS === 'ios') {
+        try {
+          selectedPrinter = await Print.selectPrinterAsync();
+        } catch (printerError) {
+          console.log('Printer selection cancelled or unavailable');
+        }
+      }
+      
+      await Print.printAsync({
+        html: htmlContent,
+        printerUrl: selectedPrinter?.url
+      });
+      
+      showToast?.('Document sent to printer', 'success');
+    } catch (error) {
+      console.error('Print error:', error);
+      const errorMessage = error.message?.includes('not available') 
+        ? 'Printing is not available on this device' 
+        : 'Failed to print document';
+      showToast?.(errorMessage, 'error');
+    }
+  }, [invoiceData, selectedTheme, showToast]);
+
+  const handleShare = useCallback(async () => {
+    try {
+      let uri = pdfUri;
+      
+      if (!uri) {
+        uri = await generatePDF();
+        if (!uri) return;
+      }
+      
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        showToast?.('Sharing not available on this device', 'error');
+        return;
+      }
+
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `Share ${invoiceData?.documentType || 'Document'} ${invoiceData?.invoiceNumber || ''}`
+      });
+    } catch (error) {
+      console.error('Share error:', error);
+      showToast?.('Failed to share PDF', 'error');
+    }
+  }, [pdfUri, generatePDF, invoiceData, showToast]);
+
+  const handleSave = useCallback(async () => {
+    try {
+      let uri = pdfUri;
+      
+      if (!uri) {
+        uri = await generatePDF();
+        if (!uri) return;
+      }
+      
+      showToast?.('PDF saved successfully', 'success');
+    } catch (error) {
+      console.error('Save error:', error);
+      showToast?.('Failed to save PDF', 'error');
+    }
+  }, [pdfUri, generatePDF, showToast]);
+
+  // Enhanced email function with PDF sharing options
+  const handleEmail = useCallback(async () => {
+    try {
+      let uri = pdfUri;
+      if (!uri) {
+        uri = await generatePDF();
+        if (!uri) return;
+      }
+
+      const customerEmail = invoiceData?.customerInfo?.email;
+      if (!customerEmail) {
+        // If no customer email, show sharing options
+        Alert.alert(
+          'Email Options',
+          'Customer email not available. Choose an option:',
+          [
+            {
+              text: 'Share PDF',
+              onPress: async () => {
+                try {
+                  const isAvailable = await Sharing.isAvailableAsync();
+                  if (isAvailable) {
+                    await Sharing.shareAsync(uri, {
+                      mimeType: 'application/pdf',
+                      dialogTitle: 'Share Invoice PDF via Email'
+                    });
+                  } else {
+                    showToast?.('Sharing not available', 'error');
+                  }
+                } catch (error) {
+                  showToast?.('Failed to share PDF', 'error');
+                }
+              }
+            },
+            {
+              text: 'Open Email App',
+              onPress: async () => {
+                try {
+                  const subject = `${(invoiceData?.documentType || 'Document').toUpperCase()} ${invoiceData?.invoiceNumber || ''}`;
+                  const body = `Please find attached your ${invoiceData?.documentType?.toLowerCase() || 'document'}.
+
+Thank you for your business!
+
+Best regards,
+${invoiceData?.businessInfo?.name || 'Your Business'}
+
+---
+Note: Please attach the PDF file manually from your device storage.
+File name: ${uri.split('/').pop()}`;
+
+                  const mailtoLink = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                  
+                  const canOpen = await Linking.canOpenURL(mailtoLink);
+                  if (canOpen) {
+                    await Linking.openURL(mailtoLink);
+                    showToast?.('Email app opened. Please attach PDF manually.', 'info');
+                  } else {
+                    showToast?.('Email app not available', 'error');
+                  }
+                } catch (error) {
+                  showToast?.('Failed to open email app', 'error');
+                }
+              }
+            },
+            { text: 'Cancel', style: 'cancel' }
+          ]
+        );
+        return;
+      }
+
+      // Customer email available - show options
+      Alert.alert(
+        'Send Invoice',
+        `Send to: ${customerEmail}`,
+        [
+          {
+            text: 'Share PDF',
+            onPress: async () => {
+              try {
+                const isAvailable = await Sharing.isAvailableAsync();
+                if (isAvailable) {
+                  await Sharing.shareAsync(uri, {
+                    mimeType: 'application/pdf',
+                    dialogTitle: `Share Invoice to ${customerEmail}`
+                  });
+                  showToast?.('PDF shared successfully', 'success');
+                } else {
+                  showToast?.('Sharing not available', 'error');
+                }
+              } catch (error) {
+                showToast?.('Failed to share PDF', 'error');
+              }
+            }
+          },
+          {
+            text: 'Open Email App',
+            onPress: async () => {
+              try {
+                const subject = `${(invoiceData?.documentType || 'Document').toUpperCase()} ${invoiceData?.invoiceNumber || ''}`;
+                const body = `Dear ${invoiceData?.customerInfo?.name || 'Customer'},
+
+Please find attached your ${invoiceData?.documentType?.toLowerCase() || 'document'} ${invoiceData?.invoiceNumber || ''}.
+
+Invoice Details:
+- Amount: ${formatCurrency(invoiceData.total || 0, invoiceData.currency || 'USD')}
+- Date: ${invoiceData.date || new Date().toLocaleDateString()}
+
+Thank you for your business!
+
+Best regards,
+${invoiceData?.businessInfo?.name || 'Your Business'}
+${invoiceData?.businessInfo?.email ? `Email: ${invoiceData.businessInfo.email}` : ''}
+${invoiceData?.businessInfo?.phone ? `Phone: ${invoiceData.businessInfo.phone}` : ''}
+
+---
+Note: Please attach the PDF file manually from your device storage.
+File location: ${uri}`;
+
+                const mailtoLink = `mailto:${customerEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                
+                const canOpen = await Linking.canOpenURL(mailtoLink);
+                if (canOpen) {
+                  await Linking.openURL(mailtoLink);
+                  showToast?.('Email app opened with pre-filled content', 'success');
+                } else {
+                  showToast?.('Email app not available', 'error');
+                }
+              } catch (error) {
+                console.error('Email error:', error);
+                showToast?.('Failed to open email app', 'error');
+              }
+            }
+          },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+    } catch (error) {
+      console.error('Email handler error:', error);
+      showToast?.('Failed to process email request', 'error');
+    }
+  }, [pdfUri, generatePDF, invoiceData, showToast]);
+
+  // Action buttons configuration
+  const actionButtons = useMemo(() => [
+    {
+      icon: 'eye',
+      label: 'Theme',
+      color: '#8b5cf6',
+      onPress: () => setShowThemeSelector(true),
+      disabled: isGenerating
+    },
+    {
+      icon: 'printer',
+      label: 'Print',
+      color: '#059669',
+      onPress: handlePrint,
+      disabled: isGenerating
+    },
+    {
+      icon: 'share',
+      label: 'Share',
+      color: '#2563eb',
+      onPress: handleShare,
+      disabled: isGenerating
+    },
+    {
+      icon: 'download',
+      label: 'Save',
+      color: '#ea580c',
+      onPress: handleSave,
+      disabled: isGenerating
+    },
+    {
+      icon: 'mail',
+      label: 'Email',
+      color: '#7c3aed',
+      onPress: handleEmail,
+      disabled: isGenerating
+    }
+  ], [handlePrint, handleShare, handleSave, handleEmail, isGenerating]);
+
+  if (!invoiceData) {
+    return null;
+  }
+
+  const currentTheme = INVOICE_THEMES[selectedTheme];
+
+  return (
+    <>
+      <Modal
+        visible={visible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={onClose}
+      >
+        <View style={styles.container}>
+          {/* Header */}
+          <View style={[styles.header, { borderBottomColor: currentTheme.primary }]}>
+            <View style={styles.headerLeft}>
+              <TouchableOpacity 
+                onPress={onClose} 
+                style={styles.closeButton}
+                disabled={isGenerating}
+              >
+                <Feather name="x" size={24} color="#374151" />
+              </TouchableOpacity>
+              <Text style={styles.headerTitle}>
+                {(invoiceData.documentType || 'Document').toUpperCase()} Preview
+              </Text>
+            </View>
+            <View style={styles.headerRight}>
+              <View style={[styles.themeIndicator, { backgroundColor: currentTheme.primary }]}>
+                <Text style={styles.themeIndicatorText}>{currentTheme.name}</Text>
+              </View>
+              {isGenerating && (
+                <ActivityIndicator size="small" color={currentTheme.primary} style={styles.loadingIndicator} />
+              )}
+            </View>
+          </View>
+
+          {/* PDF Preview Content */}
+          <ScrollView style={styles.previewContainer}>
+            <View style={[styles.previewContent, { borderColor: currentTheme.primary }]}>
+              {/* Document Header with Theme Preview */}
+              <View style={[styles.documentHeader, { 
+                backgroundColor: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? currentTheme.primary : currentTheme.secondary,
+                borderColor: currentTheme.primary 
+              }]}>
+                <View style={styles.logoSection}>
+                  {invoiceData.businessLogo && (
+                    <Image 
+                      source={{ uri: invoiceData.businessLogo }} 
+                      style={styles.businessLogo}
+                      resizeMode="contain"
+                    />
+                  )}
+                  <Text style={[styles.businessName, { 
+                    color: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? 'white' : currentTheme.primary 
+                  }]}>
+                    {invoiceData.businessInfo?.name || ''}
+                  </Text>
+                </View>
+                <View style={styles.documentInfo}>
+                  <Text style={[styles.documentTitle, { 
+                    color: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? 'white' : currentTheme.primary 
+                  }]}>
+                    {(invoiceData.documentType || 'Document').toUpperCase()}
+                  </Text>
+                  <Text style={[styles.documentNumber, { 
+                    color: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? 'rgba(255,255,255,0.9)' : '#6b7280'
+                  }]}>
+                    {invoiceData.invoiceNumber || ''}
+                  </Text>
+                  <Text style={[styles.documentDate, { 
+                    color: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? 'rgba(255,255,255,0.8)' : '#6b7280'
+                  }]}>
+                    Date: {invoiceData.date || new Date().toLocaleDateString()}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Party Information */}
+              <View style={styles.partyInfo}>
+                <View style={[styles.partySection, selectedTheme === 'elegant' && { backgroundColor: currentTheme.secondary }]}>
+                  <Text style={[styles.partyTitle, { color: currentTheme.primary }]}>From:</Text>
+                  <Text style={styles.partyName}>
+                    {invoiceData.businessInfo?.name || ''}
+                  </Text>
+                  {invoiceData.businessInfo?.address && (
+                    <Text style={styles.partyDetail}>
+                      {invoiceData.businessInfo.address}
+                    </Text>
+                  )}
+                  {invoiceData.businessInfo?.phone && (
+                    <Text style={styles.partyDetail}>
+                      Phone: {invoiceData.businessInfo.phone}
+                    </Text>
+                  )}
+                  {invoiceData.businessInfo?.email && (
+                    <Text style={styles.partyDetail}>
+                      Email: {invoiceData.businessInfo.email}
+                    </Text>
+                  )}
+                </View>
+                
+                <View style={[styles.partySection, selectedTheme === 'elegant' && { backgroundColor: currentTheme.secondary }]}>
+                  <Text style={[styles.partyTitle, { color: currentTheme.primary }]}>To:</Text>
+                  <Text style={styles.partyName}>
+                    {invoiceData.customerInfo?.name || ''}
+                  </Text>
+                  <View style={[styles.customerIdBadge, { backgroundColor: currentTheme.primary }]}>
+                    <Text style={styles.customerIdText}>
+                      Customer ID: {(() => {
+                        const customerName = invoiceData.customerInfo?.name || 'Customer';
+                        const customerInitials = customerName.split(' ').map(name => name.charAt(0)).join('').toUpperCase();
+                        return `${customerInitials}-${Date.now().toString().slice(-6)}`;
+                      })()}
+                    </Text>
+                  </View>
+                  {invoiceData.customerInfo?.address && (
+                    <Text style={styles.partyDetail}>
+                      {invoiceData.customerInfo.address}
+                    </Text>
+                  )}
+                  {invoiceData.customerInfo?.phone && (
+                    <Text style={styles.partyDetail}>
+                      Phone: {invoiceData.customerInfo.phone}
+                    </Text>
+                  )}
+                  {invoiceData.customerInfo?.email && (
+                    <Text style={styles.partyDetail}>
+                      Email: {invoiceData.customerInfo.email}
+                    </Text>
+                  )}
+                </View>
+              </View>
+
+              {/* Items Table */}
+              <View style={styles.itemsTable}>
+                <View style={[styles.tableHeader, { backgroundColor: currentTheme.primary }]}>
+                  <Text style={[styles.tableHeaderText, { flex: 2 }]}>Description</Text>
+                  <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>Qty</Text>
+                  <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'right' }]}>Price</Text>
+                  <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'right' }]}>Total</Text>
+                </View>
+                
+                {(invoiceData.items || []).map((item, index) => {
+                  const itemTotal = (parseFloat(item.quantity || 0) * parseFloat(item.price || 0));
+                  return (
+                    <View key={index} style={[
+                      styles.tableRow,
+                      index % 2 === 1 && { backgroundColor: currentTheme.secondary }
+                    ]}>
+                      <Text style={[styles.tableCell, { flex: 2 }]}>
+                        {item.description || ''}
+                      </Text>
+                      <Text style={[styles.tableCell, { flex: 1, textAlign: 'center' }]}>
+                        {item.quantity || ''}
+                      </Text>
+                      <Text style={[styles.tableCell, { flex: 1, textAlign: 'right' }]}>
+                        {currencyFormatter(parseFloat(item.price || 0))}
+                      </Text>
+                      <Text style={[styles.tableCell, { flex: 1, textAlign: 'right', fontWeight: '600' }]}>
+                        {currencyFormatter(itemTotal)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Totals */}
+              <View style={styles.totalsSection}>
+                <View style={[styles.totalsContainer, selectedTheme === 'elegant' && {
+                  backgroundColor: currentTheme.secondary,
+                  borderColor: currentTheme.primary
+                }]}>
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>Subtotal:</Text>
+                    <Text style={styles.totalValue}>
+                      {currencyFormatter(invoiceData.subtotal || 0)}
+                    </Text>
+                  </View>
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>
+                      Tax ({invoiceData.TaxRate || 0}%):
+                    </Text>
+                    <Text style={styles.totalValue}>
+                      {currencyFormatter(invoiceData.tax || 0)}
+                    </Text>
+                  </View>
+                  <View style={[
+                    styles.totalRow, 
+                    styles.grandTotal, 
+                    { 
+                      backgroundColor: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? currentTheme.primary : currentTheme.secondary,
+                      borderColor: currentTheme.primary 
+                    }
+                  ]}>
+                    <Text style={[styles.grandTotalLabel, { 
+                      color: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? 'white' : currentTheme.primary 
+                    }]}>TOTAL:</Text>
+                    <Text style={[styles.grandTotalValue, { 
+                      color: selectedTheme === 'modern' || selectedTheme === 'vibrant' ? 'white' : currentTheme.primary 
+                    }]}>
+                      {currencyFormatter(invoiceData.total || 0)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Notes */}
+              {invoiceData.notes && (
+                <View style={[
+                  styles.notesSection,
+                  selectedTheme === 'elegant' && { backgroundColor: currentTheme.secondary }
+                ]}>
+                  <Text style={[styles.notesTitle, { color: currentTheme.primary }]}>Notes:</Text>
+                  <Text style={[styles.notesContent, { 
+                    backgroundColor: selectedTheme === 'elegant' ? 'white' : currentTheme.secondary,
+                    borderLeftColor: currentTheme.primary 
+                  }]}>{invoiceData.notes}</Text>
+                </View>
+              )}
+
+              {/* Signature */}
+              {invoiceData.customerSignature && (
+                <View style={styles.signatureSection}>
+                  <Text style={[styles.signatureTitle, { color: currentTheme.primary }]}>Business Signature:</Text>
+                  <Image 
+                    source={{ uri: invoiceData.customerSignature }} 
+                    style={[styles.signatureImage, { borderColor: currentTheme.primary }]}
+                    resizeMode="contain"
+                  />
+                </View>
+              )}
+            </View>
+          </ScrollView>
+
+          {/* Action Buttons */}
+          <View style={[styles.actionBar, { borderTopColor: currentTheme.primary + '20' }]}>
+            {actionButtons.map((button, index) => (
+              <TouchableOpacity
+                key={index}
+                style={[
+                  styles.actionButton, 
+                  { backgroundColor: button.color },
+                  button.disabled && styles.actionButtonDisabled
+                ]}
+                onPress={button.onPress}
+                disabled={button.disabled}
+              >
+                <Feather name={button.icon} size={16} color="white" />
+                <Text style={styles.actionButtonText}>{button.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Theme Selector Modal */}
+      <ThemeSelector
+        visible={showThemeSelector}
+        onClose={() => setShowThemeSelector(false)}
+        selectedTheme={selectedTheme}
+        onThemeChange={handleThemeChange}
+      />
+    </>
+  );
+};
+
+// Enhanced StyleSheet with theme support
 const styles = {
   container: {
     flex: 1,
@@ -848,8 +1530,7 @@ const styles = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    borderBottomWidth: 2,
     backgroundColor: '#f9fafb'
   },
   headerLeft: {
@@ -857,14 +1538,33 @@ const styles = {
     alignItems: 'center',
     flex: 1
   },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
   closeButton: {
     padding: 8,
-    marginRight: 12
+    marginRight: 12,
+    borderRadius: 4
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#374151'
+  },
+  themeIndicator: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 12
+  },
+  themeIndicatorText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  loadingIndicator: {
+    marginLeft: 8
   },
   previewContainer: {
     flex: 1,
@@ -875,20 +1575,27 @@ const styles = {
     margin: 16,
     padding: 20,
     borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3
+    borderWidth: 1,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
   },
   documentHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 24,
-    borderBottomWidth: 2,
-    borderBottomColor: '#2563eb',
-    paddingBottom: 16
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1
   },
   logoSection: {
     flex: 1
@@ -900,8 +1607,7 @@ const styles = {
   },
   businessName: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#374151'
+    fontWeight: 'bold'
   },
   documentInfo: {
     alignItems: 'flex-end'
@@ -909,17 +1615,15 @@ const styles = {
   documentTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#2563eb',
     marginBottom: 4
   },
   documentNumber: {
     fontSize: 16,
-    color: '#6b7280',
     marginBottom: 4
   },
   documentDate: {
     fontSize: 14,
-    color: '#6b7280'
+    marginBottom: 4
   },
   partyInfo: {
     flexDirection: 'row',
@@ -928,12 +1632,13 @@ const styles = {
   },
   partySection: {
     flex: 1,
-    marginRight: 16
+    marginRight: 16,
+    padding: 12,
+    borderRadius: 6
   },
   partyTitle: {
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#2563eb',
     marginBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
@@ -950,45 +1655,56 @@ const styles = {
     color: '#6b7280',
     marginBottom: 2
   },
+  customerIdBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginBottom: 6
+  },
+  customerIdText: {
+    fontSize: 11,
+    color: 'white',
+    fontWeight: '500'
+  },
   itemsTable: {
-    marginBottom: 24
+    marginBottom: 24,
+    borderRadius: 8,
+    overflow: 'hidden'
   },
   tableHeader: {
     flexDirection: 'row',
-    backgroundColor: '#f3f4f6',
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#d1d5db'
+    padding: 12
   },
   tableHeaderText: {
     fontSize: 12,
     fontWeight: 'bold',
-    color: '#374151'
+    color: 'white'
   },
   tableRow: {
     flexDirection: 'row',
     padding: 12,
     borderBottomWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: '#d1d5db',
-    backgroundColor: '#ffffff'
+    borderBottomColor: '#e5e7eb'
   },
   tableCell: {
     fontSize: 12,
     color: '#374151'
   },
   totalsSection: {
-    alignSelf: 'flex-end',
-    width: width * 0.6,
+    alignItems: 'flex-end',
     marginBottom: 24
+  },
+  totalsContainer: {
+    width: width * 0.6,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1
   },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb'
+    paddingVertical: 8
   },
   totalLabel: {
     fontSize: 14,
@@ -996,42 +1712,40 @@ const styles = {
   },
   totalValue: {
     fontSize: 14,
-    color: '#374151'
+    color: '#374151',
+    fontWeight: '500'
   },
   grandTotal: {
-    borderTopWidth: 2,
-    borderBottomWidth: 2,
-    borderColor: '#2563eb',
-    backgroundColor: '#f3f4f6',
-    paddingVertical: 12
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 6,
+    marginTop: 8,
+    borderWidth: 2
   },
   grandTotalLabel: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#374151'
+    fontWeight: 'bold'
   },
   grandTotalValue: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#374151'
+    fontWeight: 'bold'
   },
   notesSection: {
-    marginBottom: 24
+    marginBottom: 24,
+    padding: 16,
+    borderRadius: 8
   },
   notesTitle: {
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#2563eb',
     marginBottom: 8
   },
   notesContent: {
     fontSize: 12,
     color: '#374151',
-    backgroundColor: '#f9fafb',
     padding: 12,
     borderRadius: 4,
-    borderLeftWidth: 4,
-    borderLeftColor: '#2563eb'
+    borderLeftWidth: 4
   },
   signatureSection: {
     marginTop: 32,
@@ -1040,21 +1754,19 @@ const styles = {
   signatureTitle: {
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#374151',
     marginBottom: 8
   },
   signatureImage: {
     width: 150,
     height: 50,
-    borderWidth: 1,
-    borderColor: '#d1d5db'
+    borderWidth: 2,
+    borderRadius: 4
   },
   actionBar: {
     flexDirection: 'row',
     padding: 16,
     backgroundColor: '#f9fafb',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb'
+    borderTopWidth: 2
   },
   actionButton: {
     flex: 1,
@@ -1063,12 +1775,80 @@ const styles = {
     justifyContent: 'center',
     paddingVertical: 12,
     marginHorizontal: 4,
-    borderRadius: 6
+    borderRadius: 6,
+    minHeight: 44
+  },
+  actionButtonDisabled: {
+    opacity: 0.5
   },
   actionButtonText: {
     color: 'white',
     fontWeight: '500',
     marginLeft: 6,
     fontSize: 12
+  },
+  // Theme Selector Styles
+  themeModalContainer: {
+    flex: 1,
+    backgroundColor: '#ffffff'
+  },
+  themeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#f9fafb'
+  },
+  themeHeaderTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#374151'
+  },
+  themeCloseButton: {
+    padding: 8
+  },
+  themeScrollContainer: {
+    flex: 1,
+    padding: 16
+  },
+  themeOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    marginBottom: 12,
+    borderRadius: 8,
+    borderWidth: 2,
+    backgroundColor: '#ffffff'
+  },
+  themeOptionSelected: {
+    backgroundColor: '#f0f7ff',
+    borderWidth: 2
+  },
+  themePreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1
+  },
+  themeColorBar: {
+    width: 4,
+    height: 40,
+    borderRadius: 2,
+    marginRight: 12
+  },
+  themeInfo: {
+    flex: 1
+  },
+  themeOptionName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#374151',
+    marginBottom: 4
+  },
+  themeOptionDescription: {
+    fontSize: 12,
+    color: '#6b7280'
   }
 };

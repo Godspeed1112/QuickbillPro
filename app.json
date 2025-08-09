@@ -2,20 +2,23 @@
   "expo": {
     "name": "QuickBillPro",
     "slug": "divedigital-quickbillpro",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "assets/fire.png",
     "userInterfaceStyle": "light",
     "splash": {
       "image": "assets/fire.png",
       "resizeMode": "contain",
-      "backgroundColor": "#005c57"
+      "backgroundColor": "#e9e8e8ff"
     },
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSContactsUsageDescription": "This app needs access to contacts to import customer information."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -23,6 +26,7 @@
         "backgroundColor": "#005c57"
       },
       "permissions": [
+        "READ_CONTACTS",
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",

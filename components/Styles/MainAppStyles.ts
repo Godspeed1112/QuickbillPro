@@ -1,19 +1,18 @@
-// components/styles/MainAppStyles.js
+// components/styles/MainAppStyles.js - FIXED DARK MODE VERSION
 import { StyleSheet } from 'react-native';
 
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1e40af',
+    backgroundColor: '#f3f4f6',
   },
   scrollContainer: {
     padding: 16,
+    backgroundColor: '#f3f4f6',
   },
   header: {
-    backgroundColor: '#2563eb',
-    padding: 24,
-    borderRadius: 8,
-    marginBottom: 24,
+    backgroundColor: '#1c5eaaff',
+    padding: 20,
   },
   headerTitle: {
     flexDirection: 'row',
@@ -25,6 +24,7 @@ export const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: 'white',
     marginLeft: 12,
+    paddingTop: 20,
   },
   headerSubtext: {
     fontSize: 16,
@@ -54,6 +54,8 @@ export const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     marginBottom: 12,
+    color: '#1f2937',
+    backgroundColor: '#ffffff',
   },
   row: {
     flexDirection: 'row',
@@ -83,25 +85,32 @@ export const styles = StyleSheet.create({
     borderColor: '#d1d5db',
     borderRadius: 8,
     padding: 12,
+    color: '#1f2937',
+    backgroundColor: '#ffffff',
   },
   itemQuantity: {
-    width: 40,
+    width: 60,
     borderWidth: 1,
     borderColor: '#d1d5db',
     borderRadius: 8,
     padding: 12,
+    color: '#1f2937',
+    backgroundColor: '#ffffff',
   },
   itemPrice: {
-    width: 40,
+    width: 60,
     borderWidth: 1,
     borderColor: '#d1d5db',
     borderRadius: 8,
     padding: 12,
+    color: '#1f2937',
+    backgroundColor: '#ffffff',
   },
   itemTotal: {
-    width: 80,
+    width: 40,
     textAlign: 'right',
     fontWeight: '500',
+    color: '#1f2937',
   },
   addButton: {
     backgroundColor: '#2563eb',
@@ -130,10 +139,12 @@ export const styles = StyleSheet.create({
   },
   totalText: {
     fontSize: 16,
+    color: '#1f2937',
   },
   totalAmount: {
     fontSize: 16,
     fontWeight: '500',
+    color: '#1f2937',
   },
   grandTotal: {
     borderTopWidth: 1,
@@ -148,6 +159,8 @@ export const styles = StyleSheet.create({
     fontSize: 16,
     height: 80,
     textAlignVertical: 'top',
+    color: '#1f2937',
+    backgroundColor: '#ffffff',
   },
   actionsContainer: {
     flexDirection: 'row',
@@ -170,7 +183,7 @@ export const styles = StyleSheet.create({
     marginLeft: 8,
   },
   resetButton: {
-    backgroundColor: '#4b5563',
+    backgroundColor: '#bdbdbeff',
     padding: 16,
     borderRadius: 8,
     alignItems: 'center',
@@ -185,12 +198,13 @@ export const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#fdfdfdff',
     flexDirection: 'row',
     borderTopWidth: 1,
-    borderTopColor: '#010635ff',
     paddingBottom: 10,
     paddingTop: 5,
+    borderRadius: 36,
+    backgroundColor: 'white',
+    borderTopColor: '#e5e7eb',
   },
   bottomTab: {
     flex: 1,
@@ -216,6 +230,7 @@ export const styles = StyleSheet.create({
   },
   invoiceTitle: {
     fontSize: 18,
+    paddingTop: 14,
     fontWeight: '600',
     color: '#1f2937',
   },
@@ -225,4 +240,109 @@ export const styles = StyleSheet.create({
     marginTop: 4,
   },
 });
-// Add this to your MainAppStyles.js file
+
+// Enhanced Dark Mode Styles
+export const darkStyless = {
+  container: {
+    backgroundColor: '#1f2937',
+  },
+  scrollContainer: {
+    backgroundColor: '#1f2937',
+  },
+  section: {
+    backgroundColor: '#374151',
+    borderColor: '#4b5563',
+    borderWidth: 1,
+  },
+  header: {
+    backgroundColor: '#111827',
+  },
+  headerText: {
+    color: '#f3f4f6',
+  },
+  headerSubtext: {
+    color: 'rgba(243, 244, 246, 0.8)',
+  },
+  sectionTitleText: {
+    color: '#f3f4f6',
+  },
+  input: {
+    backgroundColor: '#4b5563',
+    borderColor: '#6b7280',
+    color: '#f3f4f6',
+  },
+  bottomTabBar: {
+    backgroundColor: '#374151',
+    borderTopColor: '#4b5563',
+  },
+  bottomTabText: {
+    color: '#9ca3af',
+  },
+  activeBottomTabText: {
+    color: '#2563eb',
+    fontWeight: '500',
+  },
+  actionButton: {
+    shadowColor: '#000',
+  },
+  resetButton: {
+    backgroundColor: '#dc2626',
+  },
+  resetButtonText: {
+    color: '#ffffff',
+  },
+  itemRow: {
+    backgroundColor: 'transparent',
+  },
+  itemDescription: {
+    backgroundColor: '#4b5563',
+    color: '#f3f4f6',
+    borderColor: '#6b7280',
+  },
+  itemQuantity: {
+    backgroundColor: '#4b5563',
+    color: '#f3f4f6',
+    borderColor: '#6b7280',
+  },
+  itemPrice: {
+    backgroundColor: '#4b5563',
+    color: '#f3f4f6',
+    borderColor: '#6b7280',
+  },
+  itemTotal: {
+    color: '#f3f4f6',
+  },
+  totalsContainer: {
+    borderTopColor: '#6b7280',
+  },
+  totalText: {
+    color: '#f3f4f6',
+  },
+  totalAmount: {
+    color: '#f3f4f6',
+  },
+  grandTotal: {
+    borderTopColor: '#6b7280',
+  },
+  textarea: {
+    backgroundColor: '#4b5563',
+    borderColor: '#6b7280',
+    color: '#f3f4f6',
+  },
+  radioText: {
+    color: '#f3f4f6',
+  },
+  addButtonText: {
+    color: '#ffffff',
+  },
+  actionButtonText: {
+    color: '#ffffff',
+  },
+  invoiceTitle: {
+    color: '#f3f4f6',
+  },
+  invoiceDate: {
+    color: '#9ca3af',
+  },
+  
+};
