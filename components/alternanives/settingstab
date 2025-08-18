@@ -1,31 +1,9 @@
-// components/SettingsTab.tsx - ENHANCED UI VERSION
+// components/SettingsTab.tsx - ENHANCED WITH USER PROFILE INTEGRATION
 import React, { useState, useEffect, useCallback } from 'react';
-import { View,Text,Switch,TouchableOpacity,ScrollView,TextInput,Alert,Animated,Dimensions
+import { View,Text,Switch,TouchableOpacity,ScrollView,TextInput,Alert,Animated,Dimensions,Image
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useCurrency } from 'components/CurrencyContext';
-
-
-
-const saveCompanyEmail = async (email: string) => {
-  try {
-    await AsyncStorage.setItem("companyEmail", email);
-  } catch (error) {
-    console.error("Failed to save company email:", error);
-  }
-};
-
-const loadCompanyEmail = async (): Promise<string | null> => {
-  try {
-    return await AsyncStorage.getItem("companyEmail");
-  } catch (error) {
-    console.error("Failed to load company email:", error);
-    return null;
-  }
-};
-
-
 
 const { width } = Dimensions.get('window');
 
@@ -46,7 +24,8 @@ const SettingsTab = ({
   appSettings, 
   onSettingsUpdate,
   onLogout,
-  TaxRate
+  TaxRate,
+  navigation // Add navigation prop for profile setup
 }) => {
   // Local state for form inputs to prevent constant updates
   const [localSettings, setLocalSettings] = useState({
@@ -54,24 +33,29 @@ const SettingsTab = ({
     companyEmail: '',
     defaultTaxRate: '10',
     TaxRate: '',
-
     ...appSettings
   });
+
+  // User Profile State
+  const [userProfile, setUserProfile] = useState(null);
   
   const [isSaving, setIsSaving] = useState(false);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
   const [fadeAnim] = useState(new Animated.Value(0));
-  // REMOVED: const [isLoggedIn, setIsLoggedIn] = useState(true); - This was causing the issue!
- 
-  useEffect(() => {
-    (async () => {
-      const cur = await getCurrency();
-      setCurrency(cur);
-    })();
-  }, []);
 
+  // Load user profile
+  const loadUserProfile = async () => {
+    try {
+      const storedProfile = await AsyncStorage.getItem('@user_profile');
+      if (storedProfile) {
+        setUserProfile(JSON.parse(storedProfile));
+      }
+    } catch (error) {
+      console.error('Error loading user profile:', error);
+    }
+  };
 
-  // Initialize local settings from props - ONLY run when appSettings actually changes
+  // Initialize local settings from props and load user profile
   useEffect(() => {
     if (appSettings && Object.keys(appSettings).length > 0) {
       setLocalSettings(prevLocal => ({
@@ -79,20 +63,21 @@ const SettingsTab = ({
         ...appSettings
       }));
     }
+    loadUserProfile();
   }, [appSettings.companyName, appSettings.companyEmail, appSettings.defaultTaxRate, appSettings.darkMode, appSettings.autoSave, appSettings.notifications, appSettings.autoBackup]);
 
   // Fade in animation
-useEffect(() => {
-  Animated.timing(fadeAnim, {
-    toValue: 1,
-    duration: 500,
-    useNativeDriver: true,
-  }).start();
-}, [fadeAnim]);
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+  }, [fadeAnim]);
 
   // Memoized save function to prevent recreation on every render
   const saveSettings = useCallback(async (settingsToSave) => {
-    if (isSaving) return; // Prevent multiple saves
+    if (isSaving) return;
     
     setIsSaving(true);
     try {
@@ -174,6 +159,16 @@ useEffect(() => {
     );
   }, [saveSettings]);
 
+  // Navigate to profile setup
+  const navigateToProfile = () => {
+    if (navigation) {
+      navigation.navigate('UserProfileSetup', { 
+        isEditMode: !!userProfile,
+        onProfileUpdate: loadUserProfile 
+      });
+    }
+  };
+
   // Handle logout with confirmation
   const handleLogout = () => {
     Alert.alert(
@@ -193,8 +188,6 @@ useEffect(() => {
       ]
     );
   };
-
-  
 
   const currentStyles = localSettings.darkMode ? { ...styles, ...darkStyles } : styles;
   const selectedCurrency = CURRENCIES.find(c => c.code === localSettings.currency) || CURRENCIES[0];
@@ -216,6 +209,126 @@ useEffect(() => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 30 }}
       >
+        {/* User Profile Card - NEW */}
+        <View style={currentStyles.section}>
+          <Text style={currentStyles.sectionTitleText}>User Profile</Text>
+          
+          {userProfile ? (
+            <View style={currentStyles.profileContainer}>
+              <View style={currentStyles.profileHeader}>
+                <View style={currentStyles.profileImageContainer}>
+                  {userProfile.avatar ? (
+                    <Image 
+                      source={{ uri: userProfile.avatar }} 
+                      style={currentStyles.profileImage}
+                    />
+                  ) : (
+                    <View style={currentStyles.profileImagePlaceholder}>
+                      <Feather name="user" size={32} color="#9CA3AF" />
+                    </View>
+                  )}
+                </View>
+                
+                <View style={currentStyles.profileInfo}>
+                  <Text style={currentStyles.profileName}>
+                    {userProfile.firstName} {userProfile.lastName}
+                  </Text>
+                  <Text style={currentStyles.profileEmail}>
+                    {userProfile.email}
+                  </Text>
+                  {userProfile.profession && (
+                    <Text style={currentStyles.profileProfession}>
+                      {userProfile.profession}
+                    </Text>
+                  )}
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={currentStyles.editProfileButton}
+                onPress={navigateToProfile}
+                activeOpacity={0.8}
+              >
+                <Feather name="edit-2" size={16} color="white" />
+                <Text style={currentStyles.editProfileButtonText}>Edit Profile</Text>
+              </TouchableOpacity>
+
+              {/* Quick Profile Stats */}
+              <View style={currentStyles.profileStatsContainer}>
+                <View style={currentStyles.profileStat}>
+                  <Feather name="phone" size={16} color="#6B7280" />
+                  <Text style={currentStyles.profileStatText}>
+                    {userProfile.phone || 'No phone'}
+                  </Text>
+                </View>
+                <View style={currentStyles.profileStat}>
+                  <Feather name="map-pin" size={16} color="#6B7280" />
+                  <Text style={currentStyles.profileStatText}>
+                    {userProfile.city ? `${userProfile.city}, ${userProfile.country}` : userProfile.country}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Assets Row */}
+              <View style={currentStyles.assetsContainer}>
+                <View style={currentStyles.assetItem}>
+                  <View style={currentStyles.assetIcon}>
+                    <Feather name="edit-3" size={16} color={userProfile.signature ? "#059669" : "#9CA3AF"} />
+                  </View>
+                  <Text style={currentStyles.assetLabel}>Signature</Text>
+                  <View style={[
+                    currentStyles.assetStatus,
+                    { backgroundColor: userProfile.signature ? "#DCFCE7" : "#F3F4F6" }
+                  ]}>
+                    <Text style={[
+                      currentStyles.assetStatusText,
+                      { color: userProfile.signature ? "#059669" : "#6B7280" }
+                    ]}>
+                      {userProfile.signature ? "Added" : "Missing"}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={currentStyles.assetItem}>
+                  <View style={currentStyles.assetIcon}>
+                    <Feather name="image" size={16} color={userProfile.logo ? "#059669" : "#9CA3AF"} />
+                  </View>
+                  <Text style={currentStyles.assetLabel}>Logo</Text>
+                  <View style={[
+                    currentStyles.assetStatus,
+                    { backgroundColor: userProfile.logo ? "#DCFCE7" : "#F3F4F6" }
+                  ]}>
+                    <Text style={[
+                      currentStyles.assetStatusText,
+                      { color: userProfile.logo ? "#059669" : "#6B7280" }
+                    ]}>
+                      {userProfile.logo ? "Added" : "Missing"}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+          ) : (
+            <View style={currentStyles.noProfileContainer}>
+              <View style={currentStyles.noProfileIcon}>
+                <Feather name="user-plus" size={32} color="#9CA3AF" />
+              </View>
+              <Text style={currentStyles.noProfileTitle}>No Profile Setup</Text>
+              <Text style={currentStyles.noProfileDescription}>
+                Create your user profile to personalize invoices and documents
+              </Text>
+              <TouchableOpacity
+                style={currentStyles.createProfileButton}
+                onPress={navigateToProfile}
+                activeOpacity={0.8}
+              >
+                <Feather name="plus" size={16} color="white" />
+                <Text style={currentStyles.createProfileButtonText}>Create Profile</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
         {/* Company Information Card */}
         <View style={currentStyles.section}>
           <Text style={currentStyles.sectionTitleText}>Company Information</Text>
@@ -371,7 +484,6 @@ useEffect(() => {
 
           {/* Toggle Settings */}
           {[
-            //{ key: 'darkMode', label: 'Dark Mode', description: 'Enable dark theme', icon: 'moon' },
             { key: 'autoSave', label: 'Auto Save', description: 'Automatically save changes', icon: 'save' },
             { key: 'notifications', label: 'Notifications', description: 'Receive app notifications', icon: 'bell' },
             { key: 'autoBackup', label: 'Auto Backup', description: 'Automatic data backup', icon: 'cloud' }
@@ -471,7 +583,7 @@ useEffect(() => {
   );
 };
 
-// Enhanced Styles
+// Enhanced Styles with User Profile additions
 const styles = {
   container: {
     flex: 1,
@@ -518,23 +630,6 @@ const styles = {
     elevation: 8,
     borderRadius: 25,
   },
-  headerIconContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  headerTextContainer: {
-    flex: 1,
-  },
-  headerTitle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
   headerText: {
     fontSize: 28,
     fontWeight: '700',
@@ -547,37 +642,169 @@ const styles = {
     fontWeight: '400',
     marginLeft: 15
   },
-  card: {
-    backgroundColor: 'white',
-    marginHorizontal: 16,
-    marginTop: 16,
-    borderRadius: 16,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
+  
+  // User Profile Styles - NEW
+  profileContainer: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  cardHeader: {
+  profileHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  cardIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#EBF4FF',
+  profileImageContainer: {
+    marginRight: 16,
+  },
+  profileImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#F1F5F9',
+  },
+  profileImagePlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#F1F5F9',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
   },
-  cardTitle: {
-    fontSize: 20,
+  profileInfo: {
+    flex: 1,
+  },
+  profileName: {
+    fontSize: 18,
     fontWeight: '600',
-    color: '#1F2937',
+    color: '#1E293B',
+    marginBottom: 4,
   },
+  profileEmail: {
+    fontSize: 14,
+    color: '#64748B',
+    marginBottom: 2,
+  },
+  profileProfession: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '500',
+  },
+  editProfileButton: {
+    backgroundColor: '#059669',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  editProfileButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  profileStatsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  profileStat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  profileStatText: {
+    fontSize: 12,
+    color: '#64748B',
+    marginLeft: 6,
+    flex: 1,
+  },
+  assetsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  assetItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  assetIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F1F5F9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  assetLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#475569',
+    marginBottom: 4,
+  },
+  assetStatus: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  assetStatusText: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  noProfileContainer: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  noProfileIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#F1F5F9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  noProfileTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1E293B',
+    marginBottom: 8,
+  },
+  noProfileDescription: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 20,
+    paddingHorizontal: 20,
+  },
+  createProfileButton: {
+    backgroundColor: '#059669',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  createProfileButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+
+  // Existing styles continue...
   inputGroup: {
     marginBottom: 20,
   },
@@ -773,26 +1000,6 @@ const styles = {
     borderWidth: 2,
     borderColor: '#2563EB',
   },
-  dangerButton: {
-    backgroundColor: '#DC2626',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
-    shadowColor: '#DC2626',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  dangerButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
   warningText: {
     fontSize: 13,
     color: '#6B7280',
@@ -874,7 +1081,7 @@ const styles = {
   },
 };
 
-
+// Dark Mode Styles with Profile additions
 const darkStyles = {
   container: {
     backgroundColor: '#0F172A',
@@ -893,14 +1100,41 @@ const darkStyles = {
   header: {
     backgroundColor: '#8e9197ff',
   },
-  card: {
-    backgroundColor: '#1E293B',
-    borderColor: '#334155',
-    borderWidth: 1,
+  
+  // Dark Profile Styles
+  profileContainer: {
+    backgroundColor: '#334155',
+    borderColor: '#475569',
   },
-  cardTitle: {
+  profileName: {
     color: '#F1F5F9',
   },
+  profileEmail: {
+    color: '#94A3B8',
+  },
+  profileProfession: {
+    color: '#10B981',
+  },
+  profileStatText: {
+    color: '#94A3B8',
+  },
+  assetIcon: {
+    backgroundColor: '#475569',
+  },
+  assetLabel: {
+    color: '#94A3B8',
+  },
+  noProfileIcon: {
+    backgroundColor: '#334155',
+  },
+  noProfileTitle: {
+    color: '#F1F5F9',
+  },
+  noProfileDescription: {
+    color: '#94A3B8',
+  },
+  
+  // Existing dark styles
   label: {
     color: '#F1F5F9',
   },
@@ -951,6 +1185,12 @@ const darkStyles = {
   },
   warningText: {
     color: '#94A3B8',
+  },
+  appInfoLabel: {
+    color: '#94A3B8',
+  },
+  appInfoValue: {
+    color: '#F1F5F9',
   },
 };
 

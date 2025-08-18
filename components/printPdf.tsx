@@ -732,7 +732,16 @@ const generateHtmlContent = async (invoiceData, theme = 'modern') => {
     customerSignature ? convertImageToBase64(customerSignature) : null
   ]);
 
-  const formatCurrencyValue = (amount) => formatCurrency(amount, currency);
+  const isThermalTheme = (INVOICE_THEMES[theme]?.type === 'thermal');
+  const formatCurrencyValue = (amount) => {
+    const num = Number(amount || 0);
+    if (isThermalTheme) {
+      const curr = CURRENCIES.find(c => c.code === currency) || CURRENCIES[0];
+      // Many thermal printers lack Unicode glyphs for symbols. Use currency code to ensure visibility.
+      return `${curr.code} ${num.toFixed(2)}`;
+    }
+    return formatCurrency(num, currency);
+  };
 
   const itemsHtml = items.map(item => {
     const itemTotal = (parseFloat(item.quantity || 0) * parseFloat(item.price || 0));

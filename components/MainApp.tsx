@@ -1,4 +1,4 @@
-// components/MainApp.tsx - UPDATED WITH CUSTOMER MANAGEMENT
+// components/MainApp.tsx - UPDATED WITH INVENTORY INTEGRATION
 import * as ImagePicker from 'expo-image-picker';
 import { useState, useEffect, useCallback } from 'react';
 import { View,Text,TextInput,TouchableOpacity,ScrollView,Alert,Share,Linking,SafeAreaView,StatusBar,Modal} from 'react-native';
@@ -12,10 +12,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import LoginScreen from 'components/Login';
 import { generateInvoicePdf } from './printPdf';
 import { uploadPdfToDrive } from 'utils/googleDriveUpload';
-import * as Google from 'expo-auth-session/providers/google';
 import UploadScreen from './UploadScreen';
 import InventoryManagement from './InventoryManagement';
-
+import HelpCard from './HelpCard';
+import { CurrencyProvider } from "../components/CurrencyContext"; 
+import handleSendInvoice from '../utils/handleSendInvoice'
 
 // Customer interface
 interface Customer {
@@ -27,15 +28,29 @@ interface Customer {
   createdAt: number;
 }
 
+// Product interface
+interface Product {
+  id: string;
+  name: string;
+  description: string;
+  price: string;
+  category: string;
+  stock: string;
+  sku: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 const App = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
  
-  
   // Check if user is already logged in when app starts
   useEffect(() => {
     checkAuthStatus();
   }, []);
+
+  
 
   const checkAuthStatus = async () => {
     try {
@@ -99,7 +114,6 @@ const handlePrintInvoice = async (invoice) => {
   await generateInvoicePdf(invoice);
 };
 
-
 // Toast Component
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
@@ -132,9 +146,9 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
+
 // Currency list
 const CURRENCIES = [
-
   { code: 'YEN', symbol: 'Y', name: 'Chinese Yen' },
   { code: 'GHC', symbol: '₵', name: 'Ghana Cedi' },
   { code: 'USD', symbol: '$', name: 'USD' },
@@ -146,7 +160,7 @@ const CURRENCIES = [
 
 // Default app settings
 const DEFAULT_APP_SETTINGS = {
-  currency: 'GHC',
+  currency: 'USD',
   darkMode: false,
   autoSave: true,
   defaultTaxRate: '10',
@@ -289,6 +303,247 @@ const CustomerDropdown = ({ customers, selectedCustomer, onSelectCustomer, isDar
   );
 };
 
+
+
+// Inventory Product Picker Modal
+const InventoryPickerModal = ({ visible, onClose, onSelectProduct, isDarkMode }) => {
+  const [products, setProducts] = useState([]);
+  const [filteredProducts, setFilteredProducts] = useState([]);
+  const [searchText, setSearchText] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const currentStyles = isDarkMode ? { ...styles, ...darkStyles } : styles;
+
+  useEffect(() => {
+  const loadProducts = async () => {
+    try {
+      setLoading(true);
+      const stored = await AsyncStorage.getItem('inventory_products');
+      const products = stored ? JSON.parse(stored) : [];
+      setProducts(products);
+      setFilteredProducts(products);
+    } catch (error) {
+      console.error('Error loading products:', error);
+      setProducts([]);
+      setFilteredProducts([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (visible) {
+    loadProducts();
+  }
+}, [visible]);
+
+useEffect(() => {
+  filterProducts();
+
+}, [searchText, products]);
+
+  const filterProducts = () => {
+    let filtered = [...products];
+
+    if (searchText && searchText.trim()) {
+      const search = searchText.toLowerCase().trim();
+      filtered = filtered.filter(product => {
+        const name = (product.name || '').toLowerCase();
+        const description = (product.description || '').toLowerCase();
+        const sku = (product.sku || '').toLowerCase();
+        const category = (product.category || '').toLowerCase();
+        
+        return name.includes(search) || 
+               description.includes(search) || 
+               sku.includes(search) ||
+               category.includes(search);
+      });
+    }
+
+    setFilteredProducts(filtered);
+  };
+
+  const handleSelectProduct = (product) => {
+    onSelectProduct(product);
+    setSearchText('');
+    onClose();
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+    }).format(amount || 0);
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={{
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'flex-end'
+      }}>
+        <View style={{
+          backgroundColor: isDarkMode ? '#374151' : 'white',
+          borderTopLeftRadius: 20,
+          borderTopRightRadius: 20,
+          maxHeight: '80%',
+          minHeight: '60%'
+        }}>
+          {/* Header */}
+          <View style={{
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: 20,
+            borderBottomWidth: 1,
+            borderBottomColor: isDarkMode ? '#4b5563' : '#e5e7eb'
+          }}>
+            <Text style={[currentStyles.sectionTitleText, { fontSize: 18, marginBottom: 0 }]}>
+              Select from Inventory
+            </Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x" size={24} color={isDarkMode ? '#f3f4f6' : '#1f2937'} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Search */}
+          <View style={{ padding: 16 }}>
+            <View style={{ position: 'relative' }}>
+              <TextInput
+                style={[currentStyles.input, { paddingLeft: 40 }]}
+                placeholder="Search products..."
+                placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
+                value={searchText}
+                onChangeText={setSearchText}
+              />
+              <Feather 
+                name="search" 
+                size={20} 
+                color={isDarkMode ? '#9ca3af' : '#6b7280'}
+                style={{ position: 'absolute', left: 12, top: 12 }}
+              />
+            </View>
+          </View>
+
+          {/* Products List */}
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 20 }}>
+            {loading ? (
+              <View style={{ padding: 40, alignItems: 'center' }}>
+                <Text style={{ color: isDarkMode ? '#9ca3af' : '#6b7280' }}>Loading products...</Text>
+              </View>
+            ) : filteredProducts.length > 0 ? (
+              filteredProducts.map((product) => (
+                <TouchableOpacity
+                  key={product.id}
+                  style={{
+                    flexDirection: 'row',
+                    padding: 16,
+                    borderBottomWidth: 1,
+                    borderBottomColor: isDarkMode ? '#4b5563' : '#e5e7eb',
+                    alignItems: 'center'
+                  }}
+                  onPress={() => handleSelectProduct(product)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{
+                      fontSize: 16,
+                      fontWeight: '600',
+                      color: isDarkMode ? '#f3f4f6' : '#1f2937',
+                      marginBottom: 4
+                    }}>
+                      {product.name}
+                    </Text>
+                    
+                    {product.description ? (
+                      <Text style={{
+                        fontSize: 14,
+                        color: isDarkMode ? '#d1d5db' : '#6b7280',
+                        marginBottom: 4
+                      }}>
+                        {product.description}
+                      </Text>
+                    ) : null}
+
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <Text style={{
+                        fontSize: 14,
+                        fontWeight: '500',
+                        color: '#2563eb'
+                      }}>
+                        {formatCurrency(parseFloat(product.price || 0))}
+                      </Text>
+                      
+                      <Text style={{
+                        fontSize: 12,
+                        color: parseInt(product.stock || 0) <= 5 ? '#ef4444' : '#059669',
+                        fontWeight: '500'
+                      }}>
+                        Stock: {product.stock}
+                      </Text>
+
+                      <Text style={{
+                        fontSize: 12,
+                        backgroundColor: isDarkMode ? '#4b5563' : '#f3f4f6',
+                        color: isDarkMode ? '#d1d5db' : '#6b7280',
+                        paddingHorizontal: 8,
+                        paddingVertical: 2,
+                        borderRadius: 12
+                      }}>
+                        {product.category}
+                      </Text>
+                    </View>
+
+                    {product.sku ? (
+                      <Text style={{
+                        fontSize: 12,
+                        color: isDarkMode ? '#9ca3af' : '#6b7280',
+                        marginTop: 4
+                      }}>
+                        SKU: {product.sku}
+                      </Text>
+                    ) : null}
+                  </View>
+
+                  <Feather name="chevron-right" size={20} color={isDarkMode ? '#9ca3af' : '#6b7280'} />
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={{
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingVertical: 64
+              }}>
+                <Feather 
+                  name={searchText ? 'search' : 'package'} 
+                  size={64} 
+                  color={isDarkMode ? '#4b5563' : '#d1d5db'} 
+                />
+                <Text style={{
+                  fontSize: 16,
+                  color: isDarkMode ? '#9ca3af' : '#6b7280',
+                  marginTop: 16,
+                  textAlign: 'center'
+                }}>
+                  {searchText 
+                    ? 'No products found\nTry adjusting your search' 
+                    : 'No products in inventory\nAdd products in the Inventory tab'
+                  }
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 // Create Invoice Tab Component
 const CreateInvoiceTab = ({
   currency,
@@ -334,7 +589,12 @@ const CreateInvoiceTab = ({
   selectedCustomer,
   setSelectedCustomer,
   showAddCustomerModal,
-  setShowAddCustomerModal
+  setShowAddCustomerModal,
+
+  // New inventory props
+  showInventoryPicker,
+  setShowInventoryPicker,
+  handleUseProduct
 }) => {
   const currentStyles = isDarkMode ? { ...styles, ...darkStyles } : styles;
 
@@ -366,7 +626,10 @@ const CreateInvoiceTab = ({
          opacity: 0.9, 
          paddingTop: 22,   // slightly faded look
     // slight rotation for style
+    
+    
   }}/>
+   <HelpCard isDarkMode={isDarkMode ? '#1f2937' : '#f3f4f6'}/>
           <Text style={currentStyles.headerText}>Create {documentType === 'invoice' ? 'Invoice' : 'Receipt'}</Text>
         </View>
         <Text style={currentStyles.headerSubtext}>Generate professional invoices and receipts</Text>
@@ -565,16 +828,6 @@ const CreateInvoiceTab = ({
           />
           <TextInput
             style={currentStyles.input}
-            placeholder="Address"
-            placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
-            value={customerInfo.address}
-            onChangeText={(text) => {
-              setCustomerInfo({ ...customerInfo, address: text });
-              if (selectedCustomer) setSelectedCustomer(null);
-            }}
-          />
-          <TextInput
-            style={currentStyles.input}
             placeholder="Phone"
             placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
             value={customerInfo.phone}
@@ -594,11 +847,39 @@ const CreateInvoiceTab = ({
             }}
             keyboardType="email-address"
           />
-        </View>
+          
+          <TextInput
+            style={currentStyles.input}
+            placeholder="Address"
+            placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
+            value={customerInfo.address}
+            onChangeText={(text) => {
+              setCustomerInfo({ ...customerInfo, address: text });
+              if (selectedCustomer) setSelectedCustomer(null) ;
+            }}
+            keyboardType="Address"
+       />
+            </View>
 
         {/* Items */}
         <View style={currentStyles.section}>
-          <Text style={currentStyles.sectionTitleText}>Items</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <Text style={currentStyles.sectionTitleText}>Items</Text>
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#7c3aed',
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 16
+              }}
+              onPress={() => setShowInventoryPicker(true)}
+            >
+              <Feather name="package" size={14} color="white" />
+              <Text style={{ color: 'white', fontSize: 12, marginLeft: 4 }}>From Inventory</Text>
+            </TouchableOpacity>
+          </View>
 
           {items.map(item => (
             <View key={item.id} style={currentStyles.itemRow}>
@@ -635,10 +916,20 @@ const CreateInvoiceTab = ({
             </View>
           ))}
 
-          <TouchableOpacity style={currentStyles.addButton} onPress={addItem}>
-            <Feather name="plus-circle" size={16} color="white" />
-            <Text style={currentStyles.addButtonText}>Add Item</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity style={[currentStyles.addButton, { flex: 1 }]} onPress={addItem}>
+              <Feather name="plus-circle" size={16} color="white" />
+              <Text style={currentStyles.addButtonText}>Add Manual Item</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[currentStyles.addButton, { flex: 1, backgroundColor: '#7c3aed' }]} 
+              onPress={() => setShowInventoryPicker(true)}
+            >
+              <Feather name="package" size={16} color="white" />
+              <Text style={currentStyles.addButtonText}>Add from Inventory</Text>
+            </TouchableOpacity>
+          </View>
 
           {/* Totals */}
           <View style={currentStyles.totalsContainer}>
@@ -679,7 +970,7 @@ const CreateInvoiceTab = ({
             { label: 'Preview', icon: 'eye', onClick: handlePreview, color: '#2563eb' },
             { label: 'Print', icon: 'printer', onClick: handlePrint, color: '#7c3aed' },
             { label: 'Save', icon: 'download', onClick: handleSavePDF, color: '#ea580c' },
-            { label: 'Email', icon: 'mail', onClick: handleEmailWithAttachment, color: '#4338ca' }
+            { label: 'Email', icon: 'mail', onClick: handleSendInvoice, color: '#4338ca' }
           ].map((btn, i) => (
             <TouchableOpacity
               key={i}
@@ -692,26 +983,20 @@ const CreateInvoiceTab = ({
           ))}
         </View>
 
-        {/* Cloud Save Button */}
-        <TouchableOpacity
-          style={[currentStyles.actionButton, { 
-            backgroundColor: isSaving ? '#6b7280' : '#10b981',
-            marginBottom: 16,
-            opacity: isSaving ? 0.7 : 1,
-          }]}
-          onPress={UploadScreen}
-          disabled={isSaving}
-        >
-          <Feather name={isSaving ? "loader" : "cloud"} size={16} color="white" />
-          <Text style={currentStyles.actionButtonText}>
-            {isSaving ? 'Saving...' : 'Save to Cloud'}
-          </Text>
-        </TouchableOpacity>
+       
 
         <TouchableOpacity style={currentStyles.resetButton} onPress={resetForm}>
           <Text style={currentStyles.resetButtonText}>Reset Form & Generate New Number</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Inventory Picker Modal */}
+      <InventoryPickerModal
+        visible={showInventoryPicker}
+        onClose={() => setShowInventoryPicker(false)}
+        onSelectProduct={handleUseProduct}
+        isDarkMode={isDarkMode}
+      />
     </View>
   );
 };
@@ -728,12 +1013,26 @@ const SavedInvoicesTab = ({ showToast, onPrintInvoice, isDarkMode }) => {
 };
 
 // Customer Management Tab Component
-const CustomerManagementTab = ({ showToast, isDarkMode, formatCurrency }) => {
+const CustomerManagementTab = ({ showToast, isDarkMode, formatCurrency, onCustomersUpdate }) => {
   return (
-    <ManageCustomers 
+    <View style={{ flex: 1 }}>
+      <ManageCustomers 
+        showToast={showToast}
+        isDarkMode={isDarkMode}
+        formatCurrency={formatCurrency}
+        onCustomersUpdate={onCustomersUpdate}
+      />
+    </View>
+  );
+};
+
+// Inventory Management Tab Component
+const InventoryManagementTab = ({ showToast, isDarkMode, onUseProduct }) => {
+  return (
+    <InventoryManagement 
       showToast={showToast}
       isDarkMode={isDarkMode}
-      formatCurrency={formatCurrency}
+      onUseProduct={onUseProduct}
     />
   );
 };
@@ -879,11 +1178,33 @@ const AddCustomerModal = ({ visible, onClose, onAdd, isDarkMode }) => {
 
 // Main App Component - Now accepts onLogout as a prop
 const SalesInvoiceApp = ({ onLogout }) => {
-  const [toast, setToast] = useState(null);
-  const [currentTab, setCurrentTab] = useState('create');
-  
+const [toast, setToast] = useState(null);
+const [currentTab, setCurrentTab] = useState('create');
+// Customers update handler is defined later in the component
+
   // App settings state
   const [appSettings, setAppSettings] = useState(DEFAULT_APP_SETTINGS);
+
+  // Load application settings from AsyncStorage
+  const loadAppSettings = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem('@app_settings');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Merge with defaults to ensure new keys are present
+        const merged = { ...DEFAULT_APP_SETTINGS, ...parsed };
+        setAppSettings(merged);
+      } else {
+        // Initialize storage with defaults if nothing is stored
+        await AsyncStorage.setItem('@app_settings', JSON.stringify(DEFAULT_APP_SETTINGS));
+        setAppSettings(DEFAULT_APP_SETTINGS);
+      }
+    } catch (error) {
+      console.error('Error loading app settings:', error);
+      // Fallback to defaults on error
+      setAppSettings(DEFAULT_APP_SETTINGS);
+    }
+  }, []);
 
   // Business and customer info
   const [businessInfo, setBusinessInfo] = useState({
@@ -907,6 +1228,26 @@ const SalesInvoiceApp = ({ onLogout }) => {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
 
+// Load customers on startup
+  useEffect(() => {
+    loadCustomers();
+  }, []);
+
+  
+  // Load customers from AsyncStorage
+  const loadCustomers = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem('customers');
+      setCustomers(stored ? JSON.parse(stored) : []);
+    } catch (error) {
+      console.error('Error loading customers:', error);
+      setCustomers([]);
+    }
+  }, []);
+
+  // Inventory management
+  const [showInventoryPicker, setShowInventoryPicker] = useState(false);
+
   // Document data
   const [items, setItems] = useState([{ id: 1, description: '', quantity: '', price: '' }]);
   const [documentType, setDocumentType] = useState('invoice');
@@ -918,67 +1259,86 @@ const SalesInvoiceApp = ({ onLogout }) => {
   const [receiptCounter, setReceiptCounter] = useState(1);
 
   // Camera and images
-  const [businessLogo, setBusinessLogo] = useState(null);
-  const [customerSignature, setCustomerSignature] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Print PDF state
-  const [showPrintPdf, setShowPrintPdf] = useState(false);
+    const [businessLogo, setBusinessLogo] = useState(null);
+    const [customerSignature, setCustomerSignature] = useState(null);
+    const [isSaving, setIsSaving] = useState(false);
+  // Remove this line completely (it's causing the duplicate error):
+   const [showPrintPdf, setShowPrintPdf] = useState(false);
   const [invoiceToPrint, setInvoiceToPrint] = useState(null);
 
   const showToast = (msg, type = 'info') => setToast({ message: msg, type });
-
-  // Load customers on startup
-  useEffect(() => {
-    loadCustomers();
-  }, []);
-
-  const loadCustomers = async () => {
-    try {
-      const stored = await AsyncStorage.getItem('customers');
-      if (stored) {
-        setCustomers(JSON.parse(stored));
-      }
-    } catch (error) {
-      console.error('Error loading customers:', error);
-      showToast('Error loading customers', 'error');
-    }
-  };
-
-  const saveCustomers = async (updatedCustomers) => {
-    try {
-      await AsyncStorage.setItem('customers', JSON.stringify(updatedCustomers));
-      setCustomers(updatedCustomers);
-    } catch (error) {
-      console.error('Error saving customers:', error);
-      showToast('Error saving customers', 'error');
-    }
-  };
+  // const [customers, setCustomers] = useState<Customer[]>([]);
+  
 
   const addNewCustomer = async (customerData) => {
-    try {
-      const updatedCustomers = [...customers, customerData];
-      await saveCustomers(updatedCustomers);
-      showToast('Customer added successfully', 'success');
+  try {
+    const updatedCustomers = [...customers, customerData];
+    await AsyncStorage.setItem('customers', JSON.stringify(updatedCustomers));
+    setCustomers(updatedCustomers);
+    showToast('Customer added successfully', 'success');
       
-      // Auto-select the new customer
-      setSelectedCustomer(customerData);
-      setCustomerInfo({
-        name: customerData.name,
-        address: customerData.address,
-        phone: customerData.phone,
-        email: customerData.email,
-        id: customerData.id
-      });
-    } catch (error) {
-      showToast('Error adding customer', 'error');
-    }
+
+    
+     // Auto-select the new customer
+    setSelectedCustomer(customerData);
+    setCustomerInfo({
+      name: customerData.name,
+      address: customerData.address,
+      phone: customerData.phone,
+      email: customerData.email,
+      id: customerData.id
+    });
+    
+    console.log('MainApp: Added new customer, total count:', updatedCustomers.length);
+  } catch (error) {
+    console.error('MainApp: Error adding customer:', error);
+    showToast('Error adding customer', 'error');
+  }
+};
+
+// 7. Ensure customers are reloaded when the app starts and when tab changes
+useEffect(() => {
+  loadCustomers();
+}, [loadCustomers]);
+
+// Reload customers when switching to Customers or Create tabs
+useEffect(() => {
+  if (currentTab === 'customers' || currentTab === 'create') {
+    loadCustomers();
+  }
+}, [currentTab, loadCustomers]);
+  // Handle using product from inventory
+  const handleUseProduct = (product) => {
+    const newItem = {
+      id: Date.now() + Math.random(), // Ensure unique ID
+      description: product.name + (product.description ? ` - ${product.description}` : ''),
+      quantity: '1',
+      price: product.price,
+      fromInventory: true,
+      inventoryId: product.id,
+      sku: product.sku || ''
+    };
+
+    setItems(prevItems => [...prevItems, newItem]);
+    showToast(`${product.name} added to invoice`, 'success');
+    setShowInventoryPicker(true);
   };
 
   // Load app settings on startup
   useEffect(() => {
     loadAppSettings();
   }, []);
+
+  // Persist app settings when they change
+  useEffect(() => {
+    (async () => {
+      try {
+        await AsyncStorage.setItem('@app_settings', JSON.stringify(appSettings));
+      } catch (error) {
+        console.error('Error saving app settings:', error);
+      }
+    })();
+  }, [appSettings]);
 
   // Update tax rate when default changes
   useEffect(() => {
@@ -1014,16 +1374,14 @@ const SalesInvoiceApp = ({ onLogout }) => {
     loadCounters();
   }, []);
 
-  const loadAppSettings = async () => {
+  const handleCustomersUpdate = async () => {
     try {
-      const stored = await AsyncStorage.getItem('@app_settings');
+      const stored = await AsyncStorage.getItem('customers');
       if (stored) {
-        const parsedSettings = JSON.parse(stored);
-        setAppSettings({ ...DEFAULT_APP_SETTINGS, ...parsedSettings });
+        setCustomers(JSON.parse(stored));
       }
     } catch (error) {
-      console.error('Error loading app settings:', error);
-      showToast('Error loading settings', 'error');
+      console.error('Error reloading customers:', error);
     }
   };
 
@@ -1096,14 +1454,7 @@ const SalesInvoiceApp = ({ onLogout }) => {
     }
   };
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    expoClientId: '1001682900538-el8432bqs9khv5dqtohbpj08m0dh7bj8.apps.googleusercontent.com',
-    androidClientId: '1001682900538-8u57tl5loi9br14g1eqt0lkj53rpboie.apps.googleusercontent.com', 
-    iosClientId: 'YOUR_ACTUAL_IOS_CLIENT_ID.apps.googleusercontent.com',
-    scopes: ['https://www.googleapis.com/auth/drive.file'],
-    redirectUri: 'https://auth.expo.io/@digitaldive/divedigital-quickbillpro'
-  });
-
+ 
   const handleSaveToCloud = async () => {
     if (!validateForm()) return;
 
@@ -1376,9 +1727,9 @@ ${notes ? `Notes: ${notes}` : ''}`.trim();
     { id: 'create', label: 'Create', icon: 'plus-circle' },
     { id: 'saved', label: 'Saved', icon: 'folder' },
     { id: 'customers', label: 'Customers', icon: 'users' },
-    { id: 'Inventory', label: 'Inventory', icon: 'plus' },
+    { id: 'inventory', label: 'Inventory', icon: 'package' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
-    
+  
   ];
 
   const renderContent = () => {
@@ -1432,6 +1783,10 @@ ${notes ? `Notes: ${notes}` : ''}`.trim();
             setSelectedCustomer={setSelectedCustomer}
             showAddCustomerModal={showAddCustomerModal}
             setShowAddCustomerModal={setShowAddCustomerModal}
+            // Inventory integration props
+            showInventoryPicker={showInventoryPicker}
+            setShowInventoryPicker={setShowInventoryPicker}
+            handleUseProduct={handleUseProduct}
           />
         );
       case 'saved':
@@ -1442,20 +1797,21 @@ ${notes ? `Notes: ${notes}` : ''}`.trim();
             isDarkMode={appSettings.darkMode}
           />
         );
-      case 'customers':
+   case 'customers':
+  return (
+    <CustomerManagementTab 
+      showToast={showToast}
+      isDarkMode={appSettings.darkMode}
+      formatCurrency={formatCurrency}
+      onCustomersUpdate={handleCustomersUpdate} // Make sure this is passed
+    />
+  );
+      case 'inventory':
         return (
-          <CustomerManagementTab 
+          <InventoryManagementTab 
             showToast={showToast}
             isDarkMode={appSettings.darkMode}
-            formatCurrency={formatCurrency}
-          />
-        );
-        case 'Inventory':
-        return (
-          <InventoryManagement 
-            showToast={showToast}
-            isDarkMode={appSettings.darkMode}
-            InventoryManagement={InventoryManagement}
+            onUseProduct={handleUseProduct}
           />
         );
       case 'settings':
@@ -1470,6 +1826,7 @@ ${notes ? `Notes: ${notes}` : ''}`.trim();
             onLogout={onLogout}
           />
         );
+        
       default:
         return null;
     }
@@ -1540,6 +1897,5 @@ ${notes ? `Notes: ${notes}` : ''}`.trim();
     </SafeAreaView>
   );
 };
-
 
 export default App;

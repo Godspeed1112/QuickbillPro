@@ -12,7 +12,7 @@ export const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: '#1c5eaaff',
-    padding: 20,
+    padding: 8
   },
   headerTitle: {
     flexDirection: 'row',
@@ -23,12 +23,13 @@ export const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: 'white',
-    marginLeft: 12,
+    marginLeft: 4,
     paddingTop: 20,
   },
   headerSubtext: {
     fontSize: 16,
     color: '#bfdbfe',
+    marginLeft:40
   },
   section: {
     backgroundColor: 'white',

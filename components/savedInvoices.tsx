@@ -593,19 +593,18 @@ const styles = {
   container: {
     flex: 1,   
     backgroundColor: '#f3f4f6',
+    marginTop: 0
   },
   header: {
     backgroundColor: '#1666c2ff',
-    padding: 5,
-    borderRadius: 15,
-    paddingTop: 25,
+    padding: 2,
+    paddingTop: 15,
     position: 'relative',
   },
   headerTitle: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
-    padding: 15,
+    padding: 10
 
   },
   headerText: {
@@ -621,7 +620,7 @@ const styles = {
   },
   exportBtn: {
     position: 'absolute',
-    top: 75,
+    top: 40,
     right: 25,
     flexDirection: 'row',
     alignItems: 'center',

@@ -62,7 +62,8 @@
         }
       ],
       "expo-router",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-mail-composer"
     ],
     "main": "expo-router/entry",
     "runtimeVersion": {

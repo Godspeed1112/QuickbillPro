@@ -13,6 +13,10 @@ import {
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { styles, darkStyles } from 'components/Styles/MainAppStyles';
+import * as DocumentPicker from 'expo-document-picker';
+import Papa from 'papaparse';
+import * as FileSystem from 'expo-file-system';
+import * as SQLite from 'expo-sqlite';
 
 // Local formatCurrency function
 const formatCurrency = (amount: number): string => {
@@ -50,6 +54,404 @@ const DEFAULT_PRODUCT_CATEGORIES = [
   'Services',
   'Other'
 ];
+
+// Database initialization with proper error handling
+const initializeDatabase = async () => {
+  try {
+    console.log('Initializing database...');
+    const db = await SQLite.openDatabaseAsync('inventory_app.db');
+    
+    // Test database connection
+    await db.getFirstAsync('SELECT 1');
+    console.log('Database connection successful');
+    
+    // Create products table with error handling
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS products (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        price TEXT NOT NULL DEFAULT '0',
+        category TEXT DEFAULT 'General',
+        stock TEXT DEFAULT '0',
+        sku TEXT DEFAULT '',
+        createdAt INTEGER DEFAULT 0,
+        updatedAt INTEGER DEFAULT 0
+      );
+    `);
+    
+    // Create categories table
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS custom_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL
+      );
+    `);
+    
+    console.log('Database tables created successfully');
+    return db;
+  } catch (error) {
+    console.error('Database initialization error:', error);
+    throw new Error(`Database initialization failed: ${error.message}`);
+  }
+};
+
+// CSV Import Modal Component
+const CSVImportModal = ({ visible, onClose, onImport, isDarkMode }) => {
+  const [importData, setImportData] = useState([]);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [previewData, setPreviewData] = useState([]);
+
+  const currentStyles = isDarkMode ? { ...styles, ...darkStyles } : styles;
+
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/comma-separated-values', 'application/csv'],
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const file = result.assets[0];
+        setSelectedFile(file);
+        await processCSVFile(file);
+      }
+    } catch (error) {
+      console.error('Error picking file:', error);
+      Alert.alert('Error', 'Failed to pick file. Please try again.');
+    }
+  };
+
+  const processCSVFile = async (file) => {
+    setIsProcessing(true);
+    try {
+      const fileContent = await FileSystem.readAsStringAsync(file.uri);
+      
+      Papa.parse(fileContent, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: (results) => {
+          if (results.errors.length > 0) {
+            console.warn('CSV parsing errors:', results.errors);
+          }
+
+          const processedData = results.data.map((row, index) => {
+            // Clean headers and normalize common field names
+            const cleanRow = {};
+            Object.keys(row).forEach(key => {
+              const cleanKey = key.trim().toLowerCase();
+              cleanRow[cleanKey] = typeof row[key] === 'string' ? row[key].trim() : row[key];
+            });
+
+            return {
+              originalIndex: index,
+              name: cleanRow.name || cleanRow.product_name || cleanRow['product name'] || cleanRow.title || '',
+              description: cleanRow.description || cleanRow.desc || cleanRow.details || '',
+              price: cleanRow.price || cleanRow.cost || cleanRow.amount || '0',
+              category: cleanRow.category || cleanRow.type || cleanRow.group || 'General',
+              stock: cleanRow.stock || cleanRow.quantity || cleanRow.qty || cleanRow.inventory || '0',
+              sku: cleanRow.sku || cleanRow.code || cleanRow['product code'] || cleanRow.id || '',
+              valid: true,
+              errors: []
+            };
+          });
+
+          // Validate and filter data
+          const validatedData = processedData.map(item => {
+            const errors = [];
+            
+            if (!item.name) {
+              errors.push('Missing product name');
+              item.valid = false;
+            }
+            
+            if (!item.price || isNaN(parseFloat(item.price))) {
+              errors.push('Invalid price');
+              item.valid = false;
+            }
+            
+            if (!item.stock || isNaN(parseInt(item.stock))) {
+              item.stock = '0';
+            }
+
+            item.errors = errors;
+            return item;
+          });
+
+          setImportData(validatedData);
+          setPreviewData(validatedData.slice(0, 5)); // Show first 5 items for preview
+          setIsProcessing(false);
+        },
+        error: (error) => {
+          console.error('CSV parsing error:', error);
+          Alert.alert('Error', 'Failed to parse CSV file. Please check the file format.');
+          setIsProcessing(false);
+        }
+      });
+    } catch (error) {
+      console.error('Error reading file:', error);
+      Alert.alert('Error', 'Failed to read file. Please try again.');
+      setIsProcessing(false);
+    }
+  };
+
+  const handleImport = () => {
+    const validItems = importData.filter(item => item.valid);
+    
+    if (validItems.length === 0) {
+      Alert.alert('No Valid Items', 'No valid products found to import.');
+      return;
+    }
+
+    const products = validItems.map(item => ({
+      id: Date.now().toString() + Math.random().toString(),
+      name: item.name,
+      description: item.description,
+      price: item.price,
+      category: item.category,
+      stock: item.stock,
+      sku: item.sku,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }));
+
+    onImport(products);
+    handleClose();
+  };
+
+  const handleClose = () => {
+    setImportData([]);
+    setSelectedFile(null);
+    setPreviewData([]);
+    setIsProcessing(false);
+    onClose();
+  };
+
+  const validCount = importData.filter(item => item.valid).length;
+  const invalidCount = importData.length - validCount;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={handleClose}
+    >
+      <View style={{
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center'
+      }}>
+        <View style={[
+          currentStyles.section,
+          {
+            margin: 20,
+            width: '90%',
+            maxHeight: '80%',
+            backgroundColor: isDarkMode ? '#374151' : 'white'
+          }
+        ]}>
+          <View style={{
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 20
+          }}>
+            <Text style={[currentStyles.sectionTitleText, { fontSize: 18 }]}>
+              Import Products from CSV
+            </Text>
+            <TouchableOpacity onPress={handleClose}>
+              <Feather name="x" size={24} color={isDarkMode ? '#f3f4f6' : '#1f2937'} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {!selectedFile ? (
+              <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+                <Feather name="upload" size={48} color={isDarkMode ? '#9ca3af' : '#6b7280'} />
+                <Text style={{
+                  fontSize: 16,
+                  color: isDarkMode ? '#d1d5db' : '#6b7280',
+                  textAlign: 'center',
+                  marginVertical: 16
+                }}>
+                  Select a CSV file to import products
+                </Text>
+                
+                <TouchableOpacity
+                  style={[currentStyles.actionButton, { backgroundColor: '#2563eb' }]}
+                  onPress={handlePickFile}
+                >
+                  <Feather name="file-text" size={16} color="white" />
+                  <Text style={currentStyles.actionButtonText}>Choose CSV File</Text>
+                </TouchableOpacity>
+
+                <View style={{ marginTop: 24, padding: 16, backgroundColor: isDarkMode ? '#4b5563' : '#f9fafb', borderRadius: 8 }}>
+                  <Text style={{ fontWeight: 'bold', color: isDarkMode ? '#f3f4f6' : '#1f2937', marginBottom: 8 }}>
+                    📋 CSV Format Guidelines:
+                  </Text>
+                  <Text style={{ color: isDarkMode ? '#d1d5db' : '#6b7280', fontSize: 12, lineHeight: 16 }}>
+                    • Required: name, price{'\n'}
+                    • Optional: description, category, stock, sku{'\n'}
+                    • First row should contain column headers{'\n'}
+                    • Use common names like "Product Name", "Price", "Stock", etc.
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <View>
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: isDarkMode ? '#4b5563' : '#f3f4f6',
+                  padding: 12,
+                  borderRadius: 8,
+                  marginBottom: 16
+                }}>
+                  <Feather name="file-text" size={20} color={isDarkMode ? '#d1d5db' : '#6b7280'} />
+                  <Text style={{
+                    marginLeft: 8,
+                    color: isDarkMode ? '#f3f4f6' : '#1f2937',
+                    fontWeight: '500',
+                    flex: 1
+                  }}>
+                    {selectedFile.name}
+                  </Text>
+                  {isProcessing && <Text style={{ color: '#059669', fontSize: 12 }}>Processing...</Text>}
+                </View>
+
+                {importData.length > 0 && (
+                  <View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginBottom: 16 }}>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#059669' }}>
+                          {validCount}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: isDarkMode ? '#9ca3af' : '#6b7280' }}>
+                          Valid
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#ef4444' }}>
+                          {invalidCount}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: isDarkMode ? '#9ca3af' : '#6b7280' }}>
+                          Invalid
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#2563eb' }}>
+                          {importData.length}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: isDarkMode ? '#9ca3af' : '#6b7280' }}>
+                          Total
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Text style={{
+                      fontWeight: 'bold',
+                      color: isDarkMode ? '#f3f4f6' : '#1f2937',
+                      marginBottom: 12
+                    }}>
+                      Preview (First 5 items):
+                    </Text>
+
+                    {previewData.map((item, index) => (
+                      <View
+                        key={index}
+                        style={{
+                          padding: 12,
+                          backgroundColor: item.valid 
+                            ? (isDarkMode ? '#065f46' : '#d1fae5')
+                            : (isDarkMode ? '#7f1d1d' : '#fee2e2'),
+                          borderRadius: 8,
+                          marginBottom: 8
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                          <Feather 
+                            name={item.valid ? 'check-circle' : 'x-circle'} 
+                            size={16} 
+                            color={item.valid ? '#059669' : '#ef4444'} 
+                          />
+                          <Text style={{
+                            marginLeft: 8,
+                            fontWeight: 'bold',
+                            color: item.valid ? '#065f46' : '#7f1d1d',
+                            flex: 1
+                          }}>
+                            {item.name || 'Unnamed Product'}
+                          </Text>
+                        </View>
+                        <Text style={{
+                          fontSize: 12,
+                          color: item.valid ? '#047857' : '#dc2626'
+                        }}>
+                          Price: {formatCurrency(parseFloat(item.price || 0))} | Stock: {item.stock} | Category: {item.category}
+                        </Text>
+                        {item.errors.length > 0 && (
+                          <Text style={{ fontSize: 11, color: '#dc2626', marginTop: 4 }}>
+                            Issues: {item.errors.join(', ')}
+                          </Text>
+                        )}
+                      </View>
+                    ))}
+
+                    {importData.length > 5 && (
+                      <Text style={{
+                        textAlign: 'center',
+                        color: isDarkMode ? '#9ca3af' : '#6b7280',
+                        fontSize: 12,
+                        marginTop: 8
+                      }}>
+                        ... and {importData.length - 5} more items
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </View>
+            )}
+          </ScrollView>
+
+          <View style={{ flexDirection: 'row', marginTop: 20, gap: 12 }}>
+            <TouchableOpacity
+              style={[currentStyles.actionButton, { flex: 1, backgroundColor: '#6b7280' }]}
+              onPress={handleClose}
+            >
+              <Text style={currentStyles.actionButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            
+            {selectedFile && (
+              <TouchableOpacity
+                style={[currentStyles.actionButton, { flex: 1, backgroundColor: '#2563eb' }]}
+                onPress={handlePickFile}
+              >
+                <Feather name="refresh-cw" size={16} color="white" />
+                <Text style={currentStyles.actionButtonText}>Choose Different File</Text>
+              </TouchableOpacity>
+            )}
+            
+            {importData.length > 0 && validCount > 0 && (
+              <TouchableOpacity
+                style={[currentStyles.actionButton, { flex: 1, backgroundColor: '#059669' }]}
+                onPress={handleImport}
+              >
+                <Feather name="download" size={16} color="white" />
+                <Text style={currentStyles.actionButtonText}>
+                  Import {validCount} Products
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
 
 // Add Category Modal Component
 const AddCategoryModal = ({ visible, onClose, onSave, isDarkMode }) => {
@@ -126,9 +528,7 @@ const AddCategoryModal = ({ visible, onClose, onSave, isDarkMode }) => {
               <Text style={currentStyles.actionButtonText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[currentStyles.actionButton, { flex: 1, backgroundColor: '#059669',
-                
-               }]}
+              style={[currentStyles.actionButton, { flex: 1, backgroundColor: '#059669' }]}
               onPress={handleSave}
             >
               <Text style={currentStyles.actionButtonText}>Add Category</Text>
@@ -157,12 +557,12 @@ const AddEditProductModal = ({ visible, onClose, onSave, product, isDarkMode, ca
   useEffect(() => {
     if (product) {
       setFormData({
-        name: product.name,
-        description: product.description,
-        price: product.price,
-        category: product.category,
-        stock: product.stock,
-        sku: product.sku
+        name: product.name || '',
+        description: product.description || '',
+        price: product.price || '',
+        category: product.category || 'General',
+        stock: product.stock || '0',
+        sku: product.sku || ''
       });
     } else {
       setFormData({
@@ -422,7 +822,7 @@ const ProductItem = ({ product, onEdit, onDelete, onUse, isDarkMode }) => {
     );
   };
 
-  const stockColor = parseInt(product.stock) <= 5 ? '#ef4444' : '#059669';
+  const stockColor = parseInt(product.stock || 0) <= 5 ? '#ef4444' : '#059669';
 
   return (
     <View style={[
@@ -458,7 +858,7 @@ const ProductItem = ({ product, onEdit, onDelete, onUse, isDarkMode }) => {
               <Text style={{ fontWeight: '500' }}>Price:</Text> {formatCurrency(parseFloat(product.price || 0))}
             </Text>
             <Text style={{ fontSize: 14, color: stockColor, fontWeight: '500' }}>
-              Stock: {product.stock}
+              Stock: {product.stock || 0}
             </Text>
             <Text style={{
               fontSize: 12,
@@ -468,7 +868,7 @@ const ProductItem = ({ product, onEdit, onDelete, onUse, isDarkMode }) => {
               paddingVertical: 2,
               borderRadius: 12
             }}>
-              {product.category}
+              {product.category || 'General'}
             </Text>
           </View>
 
@@ -588,6 +988,15 @@ const InfoModal = ({ visible, onClose, isDarkMode }) => {
             </View>
 
             <View>
+              <Text style={{ fontWeight: 'bold', color: '#7c3aed', marginBottom: 8 }}>
+                📂 CSV Import
+              </Text>
+              <Text style={{ color: isDarkMode ? '#d1d5db' : '#6b7280', lineHeight: 20 }}>
+                Import multiple products at once from CSV files. The system automatically maps common column names like "name", "price", "stock", "category", etc.
+              </Text>
+            </View>
+
+            <View>
               <Text style={{ fontWeight: 'bold', color: isDarkMode ? '#f3f4f6' : '#1f2937', marginBottom: 8 }}>
                 🏷️ Custom Categories
               </Text>
@@ -636,7 +1045,10 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [customCategories, setCustomCategories] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [dbError, setDbError] = useState(null);
 
   const currentStyles = isDarkMode ? { ...styles, ...darkStyles } : styles;
 
@@ -645,8 +1057,7 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
 
   // Load products and categories on component mount
   useEffect(() => {
-    loadProducts();
-    loadCustomCategories();
+    initializeApp();
   }, []);
 
   // Filter products based on search and category
@@ -654,53 +1065,81 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
     filterProducts();
   }, [products, searchText, selectedCategory]);
 
+  const initializeApp = async () => {
+    setIsLoading(true);
+    setDbError(null);
+    
+    try {
+      await loadProducts();
+      await loadCustomCategories();
+    } catch (error) {
+      console.error('App initialization error:', error);
+      setDbError(error.message);
+      showToast && showToast('Database initialization failed. Using memory storage.', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const loadProducts = async () => {
     try {
-      const stored = await AsyncStorage.getItem('inventory_products');
-      if (stored) {
-        const loadedProducts = JSON.parse(stored);
-        setProducts(loadedProducts);
-      }
+      const db = await initializeDatabase();
+      const result = await db.getAllAsync('SELECT * FROM products ORDER BY updatedAt DESC');
+      setProducts(result || []);
     } catch (error) {
       console.error('Error loading products:', error);
-      showToast && showToast('Error loading products', 'error');
+      // Fallback to AsyncStorage if SQLite fails
+      try {
+        const storedProducts = await AsyncStorage.getItem('inventory_products');
+        const products = storedProducts ? JSON.parse(storedProducts) : [];
+        setProducts(products);
+        showToast && showToast('Loaded from local storage', 'info');
+      } catch (storageError) {
+        console.error('Error loading from storage:', storageError);
+        setProducts([]);
+        throw new Error('Failed to load products from database and storage');
+      }
     }
   };
 
   const loadCustomCategories = async () => {
     try {
-      const stored = await AsyncStorage.getItem('custom_categories');
-      if (stored) {
-        const loadedCategories = JSON.parse(stored);
-        setCustomCategories(loadedCategories);
-      }
-    } catch (error) {
-      console.error('Error loading custom categories:', error);
-    }
-  };
-
-  const saveProducts = async (updatedProducts) => {
-    try {
-      await AsyncStorage.setItem('inventory_products', JSON.stringify(updatedProducts));
-      setProducts(updatedProducts);
-      showToast && showToast('Products updated successfully', 'success');
-    } catch (error) {
-      console.error('Error saving products:', error);
-      showToast && showToast('Error saving products', 'error');
-    }
-  };
-
-  const saveCustomCategories = async (categories) => {
-    try {
-      await AsyncStorage.setItem('custom_categories', JSON.stringify(categories));
+      const db = await initializeDatabase();
+      const result = await db.getAllAsync('SELECT name FROM custom_categories ORDER BY name');
+      const categories = result ? result.map(row => row.name) : [];
       setCustomCategories(categories);
     } catch (error) {
-      console.error('Error saving custom categories:', error);
+      console.error('Error loading custom categories:', error);
+      // Fallback to AsyncStorage
+      try {
+        const storedCategories = await AsyncStorage.getItem('inventory_categories');
+        const categories = storedCategories ? JSON.parse(storedCategories) : [];
+        setCustomCategories(categories);
+      } catch (storageError) {
+        console.error('Error loading categories from storage:', storageError);
+        setCustomCategories([]);
+      }
+    }
+  };
+
+  const saveProductsToStorage = async (productsToSave) => {
+    try {
+      await AsyncStorage.setItem('inventory_products', JSON.stringify(productsToSave));
+    } catch (error) {
+      console.error('Error saving to AsyncStorage:', error);
+    }
+  };
+
+  const saveCategoriestoStorage = async (categoriesToSave) => {
+    try {
+      await AsyncStorage.setItem('inventory_categories', JSON.stringify(categoriesToSave));
+    } catch (error) {
+      console.error('Error saving categories to AsyncStorage:', error);
     }
   };
 
   const filterProducts = () => {
-    let filtered = [...products]; // Create a copy to avoid mutation
+    let filtered = [...products];
 
     // Filter by category first
     if (selectedCategory !== 'All') {
@@ -730,30 +1169,68 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
 
   const handleSaveProduct = async (productData) => {
     try {
-      let updatedProducts;
-      
-      if (editingProduct) {
-        // Update existing product
-        updatedProducts = products.map(p => 
-          p.id === editingProduct.id ? productData : p
-        );
-      } else {
-        // Add new product
-        updatedProducts = [...products, productData];
+      // First try to save to SQLite
+      try {
+        const db = await initializeDatabase();
+        
+        if (editingProduct) {
+          // Update existing product
+          await db.runAsync(
+            'UPDATE products SET name = ?, description = ?, price = ?, category = ?, stock = ?, sku = ?, updatedAt = ? WHERE id = ?',
+            [productData.name, productData.description, productData.price, productData.category, productData.stock, productData.sku, productData.updatedAt, productData.id]
+          );
+        } else {
+          // Add new product
+          await db.runAsync(
+            'INSERT INTO products (id, name, description, price, category, stock, sku, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [productData.id, productData.name, productData.description, productData.price, productData.category, productData.stock, productData.sku, productData.createdAt, productData.updatedAt]
+          );
+        }
+        
+        // Reload from database
+        await loadProducts();
+      } catch (dbError) {
+        console.error('Database save error, using memory storage:', dbError);
+        
+        // Fallback to in-memory update
+        let updatedProducts;
+        if (editingProduct) {
+          updatedProducts = products.map(p => p.id === productData.id ? productData : p);
+        } else {
+          updatedProducts = [productData, ...products];
+        }
+        
+        setProducts(updatedProducts);
+        await saveProductsToStorage(updatedProducts);
       }
-
-      await saveProducts(updatedProducts);
+      
       setEditingProduct(null);
+      showToast && showToast('Product saved successfully', 'success');
     } catch (error) {
+      console.error('Error saving product:', error);
       showToast && showToast('Error saving product', 'error');
     }
   };
 
   const handleDeleteProduct = async (productId) => {
     try {
-      const updatedProducts = products.filter(p => p.id !== productId);
-      await saveProducts(updatedProducts);
+      // First try SQLite
+      try {
+        const db = await initializeDatabase();
+        await db.runAsync('DELETE FROM products WHERE id = ?', [productId]);
+        await loadProducts();
+      } catch (dbError) {
+        console.error('Database delete error, using memory storage:', dbError);
+        
+        // Fallback to in-memory delete
+        const updatedProducts = products.filter(p => p.id !== productId);
+        setProducts(updatedProducts);
+        await saveProductsToStorage(updatedProducts);
+      }
+      
+      showToast && showToast('Product deleted successfully', 'success');
     } catch (error) {
+      console.error('Error deleting product:', error);
       showToast && showToast('Error deleting product', 'error');
     }
   };
@@ -781,15 +1258,83 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
     }
   };
 
-  const handleAddCategory = (categoryName) => {
-    if (!customCategories.includes(categoryName) && !DEFAULT_PRODUCT_CATEGORIES.includes(categoryName)) {
-      const updatedCategories = [...customCategories, categoryName];
-      saveCustomCategories(updatedCategories);
+  const handleAddCategory = async (categoryName) => {
+    try {
+      // First try SQLite
+      try {
+        const db = await initializeDatabase();
+        
+        // Check if category already exists
+        const existing = await db.getFirstAsync('SELECT name FROM custom_categories WHERE name = ?', [categoryName]);
+        
+        if (existing || DEFAULT_PRODUCT_CATEGORIES.includes(categoryName)) {
+          showToast && showToast('Category already exists', 'error');
+          return;
+        }
+        
+        await db.runAsync('INSERT INTO custom_categories (name) VALUES (?)', [categoryName]);
+        await loadCustomCategories();
+      } catch (dbError) {
+        console.error('Database category save error, using memory storage:', dbError);
+        
+        // Fallback to in-memory update
+        if (customCategories.includes(categoryName) || DEFAULT_PRODUCT_CATEGORIES.includes(categoryName)) {
+          showToast && showToast('Category already exists', 'error');
+          return;
+        }
+        
+        const updatedCategories = [...customCategories, categoryName];
+        setCustomCategories(updatedCategories);
+        await saveCategoriestoStorage(updatedCategories);
+      }
+      
       showToast && showToast(`Category "${categoryName}" added successfully`, 'success');
-    } else {
-      showToast && showToast('Category already exists', 'error');
+    } catch (error) {
+      console.error('Error adding category:', error);
+      showToast && showToast('Error adding category', 'error');
     }
   };
+
+  const handleImportProducts = async (importedProducts) => {
+    try {
+      // First try SQLite
+      try {
+        const db = await initializeDatabase();
+        
+        // Insert all imported products
+        for (const product of importedProducts) {
+          await db.runAsync(
+            'INSERT INTO products (id, name, description, price, category, stock, sku, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [product.id, product.name, product.description, product.price, product.category, product.stock, product.sku, product.createdAt, product.updatedAt]
+          );
+        }
+        
+        await loadProducts();
+      } catch (dbError) {
+        console.error('Database import error, using memory storage:', dbError);
+        
+        // Fallback to in-memory update
+        const updatedProducts = [...importedProducts, ...products];
+        setProducts(updatedProducts);
+        await saveProductsToStorage(updatedProducts);
+      }
+      
+      showToast && showToast(`${importedProducts.length} products imported successfully!`, 'success');
+    } catch (error) {
+      console.error('Error importing products:', error);
+      showToast && showToast('Error importing products', 'error');
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: isDarkMode ? '#1f2937' : '#f3f4f6', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: isDarkMode ? '#f3f4f6' : '#1f2937', fontSize: 16 }}>
+          Loading inventory...
+        </Text>
+      </View>
+    );
+  }
 
   const categories = ['All', ...allCategories];
   const totalProducts = products.length;
@@ -802,13 +1347,11 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
         <View style={currentStyles.headerTitle}>
           <Feather name="package" size={28} color="white"
            style={{
-        
-         marginLeft: 2,  // space between icon and text
-         alignSelf: 'center', // vertical alignment
+         marginLeft: 2,
+         alignSelf: 'center',
          opacity: 0.9, 
-         paddingTop: 22,   // slightly faded look
-    // slight rotation for style
-  }}
+         paddingTop: 22,
+          }}
           />
           <Text style={currentStyles.headerText}>Inventory Management</Text>
           <TouchableOpacity
@@ -818,18 +1361,28 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
             <Feather name="info" size={20} color="white" 
              style={{
           marginRight: 6, 
-         marginLeft: 10,  // space between icon and text
-         alignSelf: 'center', // vertical alignment
+         marginLeft: 10,
+         alignSelf: 'center',
          opacity: 0.9, 
          paddingTop: 22,
-
-  }}
+          }}
             />
           </TouchableOpacity>
         </View>
         <Text style={currentStyles.headerSubtext}>
           Manage your products and inventory
         </Text>
+        
+        {dbError && (
+          <Text style={{
+            color: '#fbbf24',
+            fontSize: 12,
+            marginTop: 4,
+            textAlign: 'center'
+          }}>
+            Using offline mode - data saved locally
+          </Text>
+        )}
       </View>
 
       {/* Stats */}
@@ -912,17 +1465,28 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
           <TouchableOpacity
             style={[currentStyles.actionButton, {
                backgroundColor: '#059669',
-               paddingVertical: 20,   // smaller vertical padding
-               paddingHorizontal: 6, // smaller horizontal padding
+               paddingVertical: 20,
+               paddingHorizontal: 6,
                minHeight: 0,
                flex: 0,
-                         // prevent forced height
-    
              }]}
             onPress={handleAddProduct}
           >
             <Feather name="plus" size={16} color="white" />
             <Text style={currentStyles.actionButtonText}>Add</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[currentStyles.actionButton, {
+               backgroundColor: '#7c3aed',
+               paddingVertical: 20,
+               paddingHorizontal: 6,
+               minHeight: 0,
+               flex: 0,
+             }]}
+            onPress={() => setShowImportModal(true)}
+          >
+            <Feather name="upload" size={16} color="white" />
+            <Text style={currentStyles.actionButtonText}>Import</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1045,6 +1609,14 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
           </View>
         )}
       </ScrollView>
+
+      {/* CSV Import Modal */}
+      <CSVImportModal
+        visible={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImport={handleImportProducts}
+        isDarkMode={isDarkMode}
+      />
 
       {/* Add/Edit Product Modal */}
       <AddEditProductModal
