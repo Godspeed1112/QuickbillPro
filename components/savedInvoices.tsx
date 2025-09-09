@@ -271,21 +271,9 @@ export const SavedInvoicesManager = ({ showToast, onPrintInvoice, onEditInvoice 
           <Feather name="download" size={16} color="white" />
           <Text style={styles.exportBtnText}>Export</Text>
         </TouchableOpacity>
+
       </View>
-  <TouchableOpacity
-    style={{
-    backgroundColor: '#ce020cff',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 20,
-    
-  }}
-  onPress={() => router.push('/CloudFiles')}
->
-  <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>
-    View Cloud Files
-  </Text>
-</TouchableOpacity>
+
 
 
       {/* Search and Filters */}
@@ -593,18 +581,19 @@ const styles = {
   container: {
     flex: 1,   
     backgroundColor: '#f3f4f6',
-    marginTop: 0
   },
   header: {
     backgroundColor: '#1666c2ff',
-    padding: 2,
-    paddingTop: 15,
+    padding: 5,
+    borderRadius: 15,
+    paddingTop: 25,
     position: 'relative',
   },
   headerTitle: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10
+    marginBottom: 8,
+    padding: 15,
 
   },
   headerText: {
@@ -620,7 +609,7 @@ const styles = {
   },
   exportBtn: {
     position: 'absolute',
-    top: 40,
+    top: 75,
     right: 25,
     flexDirection: 'row',
     alignItems: 'center',

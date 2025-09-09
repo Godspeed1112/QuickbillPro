@@ -1,6 +1,6 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { supabase } from '../utils/supabase'; // adjust path as needed
+import { supabase } from '../utils/supabaseClient'; // adjust path as needed
 import { Alert } from 'react-native';
 
 // Call this function in your onPress

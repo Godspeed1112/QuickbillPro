@@ -18,14 +18,7 @@ import Papa from 'papaparse';
 import * as FileSystem from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 
-// Local formatCurrency function
-const formatCurrency = (amount: number): string => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-  }).format(amount || 0);
-};
+// Currency formatting will be handled by the parent component
 
 // Product interface
 interface Product {
@@ -55,17 +48,90 @@ const DEFAULT_PRODUCT_CATEGORIES = [
   'Other'
 ];
 
-// Database initialization with proper error handling
-const initializeDatabase = async () => {
+// Global database instance
+let dbInstance = null;
+
+// Improved database initialization with better error handling and retry logic
+const initializeDatabase = async (retryCount = 0) => {
+  const MAX_RETRIES = 3;
+  
   try {
-    console.log('Initializing database...');
-    const db = await SQLite.openDatabaseAsync('inventory_app.db');
+    console.log(`Initializing database... (attempt ${retryCount + 1})`);
     
-    // Test database connection
-    await db.getFirstAsync('SELECT 1');
-    console.log('Database connection successful');
+    // Return existing instance if available
+    if (dbInstance) {
+      console.log('Using existing database instance');
+      return dbInstance;
+    }
     
-    // Create products table with error handling
+    // Clear any existing database on first retry
+    if (retryCount > 0) {
+      console.log('Clearing database cache...');
+      try {
+        await FileSystem.deleteAsync(`${FileSystem.documentDirectory}SQLite/inventory_app.db`, { idempotent: true });
+      } catch (clearError) {
+        console.log('Database clear attempt - file may not exist');
+      }
+    }
+    
+    // Open database with timeout
+    const dbPromise = SQLite.openDatabaseAsync('inventory_app.db');
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Database open timeout')), 10000);
+    });
+    
+    const db = await Promise.race([dbPromise, timeoutPromise]);
+    
+    if (!db) {
+      throw new Error('Failed to open database - null instance');
+    }
+    
+    console.log('Database opened successfully');
+    
+    // Test database connection with timeout
+    const testPromise = db.getFirstAsync('SELECT 1 as test');
+    const testTimeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Database test timeout')), 5000);
+    });
+    
+    const testResult = await Promise.race([testPromise, testTimeoutPromise]);
+    
+    if (!testResult || testResult.test !== 1) {
+      throw new Error('Database connection test failed');
+    }
+    
+    console.log('Database connection test successful');
+    
+    // Create tables with better error handling
+    await createTables(db);
+    
+    // Cache the working database instance
+    dbInstance = db;
+    console.log('Database initialization completed successfully');
+    return db;
+    
+  } catch (error) {
+    console.error(`Database initialization error (attempt ${retryCount + 1}):`, error);
+    
+    // Clear cached instance on error
+    dbInstance = null;
+    
+    if (retryCount < MAX_RETRIES) {
+      console.log(`Retrying database initialization... (${retryCount + 1}/${MAX_RETRIES})`);
+      await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
+      return initializeDatabase(retryCount + 1);
+    }
+    
+    throw new Error(`Database initialization failed after ${MAX_RETRIES + 1} attempts: ${error.message}`);
+  }
+};
+
+// Separate function to create tables
+const createTables = async (db) => {
+  try {
+    console.log('Creating database tables...');
+    
+    // Create products table
     await db.execAsync(`
       CREATE TABLE IF NOT EXISTS products (
         id TEXT PRIMARY KEY,
@@ -88,11 +154,28 @@ const initializeDatabase = async () => {
       );
     `);
     
-    console.log('Database tables created successfully');
-    return db;
+    // Create indexes for better performance
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+      CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
+      CREATE INDEX IF NOT EXISTS idx_products_updated ON products(updatedAt);
+    `);
+    
+    console.log('Database tables and indexes created successfully');
   } catch (error) {
-    console.error('Database initialization error:', error);
-    throw new Error(`Database initialization failed: ${error.message}`);
+    console.error('Error creating tables:', error);
+    throw new Error(`Table creation failed: ${error.message}`);
+  }
+};
+
+// Database operation wrapper with fallback
+const withDatabaseFallback = async (operation, fallbackOperation) => {
+  try {
+    const db = await initializeDatabase();
+    return await operation(db);
+  } catch (error) {
+    console.error('Database operation failed, using fallback:', error);
+    return await fallbackOperation();
   }
 };
 
@@ -808,7 +891,7 @@ const AddEditProductModal = ({ visible, onClose, onSave, product, isDarkMode, ca
 };
 
 // Product Item Component
-const ProductItem = ({ product, onEdit, onDelete, onUse, isDarkMode }) => {
+const ProductItem = ({ product, onEdit, onDelete, onUse, isDarkMode, formatCurrency }) => {
   const currentStyles = isDarkMode ? { ...styles, ...darkStyles } : styles;
 
   const handleDelete = () => {
@@ -1037,7 +1120,7 @@ const InfoModal = ({ visible, onClose, isDarkMode }) => {
 };
 
 // Main Inventory Management Component
-const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
+const InventoryManagement = ({ showToast, isDarkMode, onUseProduct, formatCurrency }) => {
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
   const [searchText, setSearchText] = useState('');
@@ -1049,6 +1132,7 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
   const [customCategories, setCustomCategories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [dbError, setDbError] = useState(null);
+  const [storageMode, setStorageMode] = useState('hybrid'); // 'sqlite', 'storage', 'hybrid'
 
   const currentStyles = isDarkMode ? { ...styles, ...darkStyles } : styles;
 
@@ -1070,56 +1154,45 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
     setDbError(null);
     
     try {
-      await loadProducts();
-      await loadCustomCategories();
+      await Promise.all([loadProducts(), loadCustomCategories()]);
     } catch (error) {
       console.error('App initialization error:', error);
       setDbError(error.message);
-      showToast && showToast('Database initialization failed. Using memory storage.', 'error');
+      showToast && showToast('Using offline mode - data saved locally', 'warning');
     } finally {
       setIsLoading(false);
     }
   };
 
   const loadProducts = async () => {
-    try {
-      const db = await initializeDatabase();
-      const result = await db.getAllAsync('SELECT * FROM products ORDER BY updatedAt DESC');
-      setProducts(result || []);
-    } catch (error) {
-      console.error('Error loading products:', error);
-      // Fallback to AsyncStorage if SQLite fails
-      try {
+    await withDatabaseFallback(
+      async (db) => {
+        const result = await db.getAllAsync('SELECT * FROM products ORDER BY updatedAt DESC');
+        setProducts(result || []);
+        setStorageMode('sqlite');
+      },
+      async () => {
         const storedProducts = await AsyncStorage.getItem('inventory_products');
         const products = storedProducts ? JSON.parse(storedProducts) : [];
         setProducts(products);
-        showToast && showToast('Loaded from local storage', 'info');
-      } catch (storageError) {
-        console.error('Error loading from storage:', storageError);
-        setProducts([]);
-        throw new Error('Failed to load products from database and storage');
+        setStorageMode('storage');
       }
-    }
+    );
   };
 
   const loadCustomCategories = async () => {
-    try {
-      const db = await initializeDatabase();
-      const result = await db.getAllAsync('SELECT name FROM custom_categories ORDER BY name');
-      const categories = result ? result.map(row => row.name) : [];
-      setCustomCategories(categories);
-    } catch (error) {
-      console.error('Error loading custom categories:', error);
-      // Fallback to AsyncStorage
-      try {
+    await withDatabaseFallback(
+      async (db) => {
+        const result = await db.getAllAsync('SELECT name FROM custom_categories ORDER BY name');
+        const categories = result ? result.map(row => row.name) : [];
+        setCustomCategories(categories);
+      },
+      async () => {
         const storedCategories = await AsyncStorage.getItem('inventory_categories');
         const categories = storedCategories ? JSON.parse(storedCategories) : [];
         setCustomCategories(categories);
-      } catch (storageError) {
-        console.error('Error loading categories from storage:', storageError);
-        setCustomCategories([]);
       }
-    }
+    );
   };
 
   const saveProductsToStorage = async (productsToSave) => {
@@ -1130,7 +1203,7 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
     }
   };
 
-  const saveCategoriestoStorage = async (categoriesToSave) => {
+  const saveCategoriesToStorage = async (categoriesToSave) => {
     try {
       await AsyncStorage.setItem('inventory_categories', JSON.stringify(categoriesToSave));
     } catch (error) {
@@ -1169,40 +1242,38 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
 
   const handleSaveProduct = async (productData) => {
     try {
-      // First try to save to SQLite
-      try {
-        const db = await initializeDatabase();
-        
-        if (editingProduct) {
-          // Update existing product
-          await db.runAsync(
-            'UPDATE products SET name = ?, description = ?, price = ?, category = ?, stock = ?, sku = ?, updatedAt = ? WHERE id = ?',
-            [productData.name, productData.description, productData.price, productData.category, productData.stock, productData.sku, productData.updatedAt, productData.id]
-          );
-        } else {
-          // Add new product
-          await db.runAsync(
-            'INSERT INTO products (id, name, description, price, category, stock, sku, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [productData.id, productData.name, productData.description, productData.price, productData.category, productData.stock, productData.sku, productData.createdAt, productData.updatedAt]
-          );
+      await withDatabaseFallback(
+        async (db) => {
+          if (editingProduct) {
+            // Update existing product
+            await db.runAsync(
+              'UPDATE products SET name = ?, description = ?, price = ?, category = ?, stock = ?, sku = ?, updatedAt = ? WHERE id = ?',
+              [productData.name, productData.description, productData.price, productData.category, productData.stock, productData.sku, productData.updatedAt, productData.id]
+            );
+          } else {
+            // Add new product
+            await db.runAsync(
+              'INSERT INTO products (id, name, description, price, category, stock, sku, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              [productData.id, productData.name, productData.description, productData.price, productData.category, productData.stock, productData.sku, productData.createdAt, productData.updatedAt]
+            );
+          }
+          
+          // Reload from database
+          await loadProducts();
+        },
+        async () => {
+          // Fallback to in-memory update
+          let updatedProducts;
+          if (editingProduct) {
+            updatedProducts = products.map(p => p.id === productData.id ? productData : p);
+          } else {
+            updatedProducts = [productData, ...products];
+          }
+          
+          setProducts(updatedProducts);
+          await saveProductsToStorage(updatedProducts);
         }
-        
-        // Reload from database
-        await loadProducts();
-      } catch (dbError) {
-        console.error('Database save error, using memory storage:', dbError);
-        
-        // Fallback to in-memory update
-        let updatedProducts;
-        if (editingProduct) {
-          updatedProducts = products.map(p => p.id === productData.id ? productData : p);
-        } else {
-          updatedProducts = [productData, ...products];
-        }
-        
-        setProducts(updatedProducts);
-        await saveProductsToStorage(updatedProducts);
-      }
+      );
       
       setEditingProduct(null);
       showToast && showToast('Product saved successfully', 'success');
@@ -1214,19 +1285,17 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
 
   const handleDeleteProduct = async (productId) => {
     try {
-      // First try SQLite
-      try {
-        const db = await initializeDatabase();
-        await db.runAsync('DELETE FROM products WHERE id = ?', [productId]);
-        await loadProducts();
-      } catch (dbError) {
-        console.error('Database delete error, using memory storage:', dbError);
-        
-        // Fallback to in-memory delete
-        const updatedProducts = products.filter(p => p.id !== productId);
-        setProducts(updatedProducts);
-        await saveProductsToStorage(updatedProducts);
-      }
+      await withDatabaseFallback(
+        async (db) => {
+          await db.runAsync('DELETE FROM products WHERE id = ?', [productId]);
+          await loadProducts();
+        },
+        async () => {
+          const updatedProducts = products.filter(p => p.id !== productId);
+          setProducts(updatedProducts);
+          await saveProductsToStorage(updatedProducts);
+        }
+      );
       
       showToast && showToast('Product deleted successfully', 'success');
     } catch (error) {
@@ -1260,33 +1329,30 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
 
   const handleAddCategory = async (categoryName) => {
     try {
-      // First try SQLite
-      try {
-        const db = await initializeDatabase();
-        
-        // Check if category already exists
-        const existing = await db.getFirstAsync('SELECT name FROM custom_categories WHERE name = ?', [categoryName]);
-        
-        if (existing || DEFAULT_PRODUCT_CATEGORIES.includes(categoryName)) {
-          showToast && showToast('Category already exists', 'error');
-          return;
+      await withDatabaseFallback(
+        async (db) => {
+          // Check if category already exists
+          const existing = await db.getFirstAsync('SELECT name FROM custom_categories WHERE name = ?', [categoryName]);
+          
+          if (existing || DEFAULT_PRODUCT_CATEGORIES.includes(categoryName)) {
+            showToast && showToast('Category already exists', 'error');
+            return;
+          }
+          
+          await db.runAsync('INSERT INTO custom_categories (name) VALUES (?)', [categoryName]);
+          await loadCustomCategories();
+        },
+        async () => {
+          if (customCategories.includes(categoryName) || DEFAULT_PRODUCT_CATEGORIES.includes(categoryName)) {
+            showToast && showToast('Category already exists', 'error');
+            return;
+          }
+          
+          const updatedCategories = [...customCategories, categoryName];
+          setCustomCategories(updatedCategories);
+          await saveCategoriesToStorage(updatedCategories);
         }
-        
-        await db.runAsync('INSERT INTO custom_categories (name) VALUES (?)', [categoryName]);
-        await loadCustomCategories();
-      } catch (dbError) {
-        console.error('Database category save error, using memory storage:', dbError);
-        
-        // Fallback to in-memory update
-        if (customCategories.includes(categoryName) || DEFAULT_PRODUCT_CATEGORIES.includes(categoryName)) {
-          showToast && showToast('Category already exists', 'error');
-          return;
-        }
-        
-        const updatedCategories = [...customCategories, categoryName];
-        setCustomCategories(updatedCategories);
-        await saveCategoriestoStorage(updatedCategories);
-      }
+      );
       
       showToast && showToast(`Category "${categoryName}" added successfully`, 'success');
     } catch (error) {
@@ -1297,27 +1363,24 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
 
   const handleImportProducts = async (importedProducts) => {
     try {
-      // First try SQLite
-      try {
-        const db = await initializeDatabase();
-        
-        // Insert all imported products
-        for (const product of importedProducts) {
-          await db.runAsync(
-            'INSERT INTO products (id, name, description, price, category, stock, sku, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [product.id, product.name, product.description, product.price, product.category, product.stock, product.sku, product.createdAt, product.updatedAt]
-          );
+      await withDatabaseFallback(
+        async (db) => {
+          // Insert all imported products
+          for (const product of importedProducts) {
+            await db.runAsync(
+              'INSERT INTO products (id, name, description, price, category, stock, sku, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              [product.id, product.name, product.description, product.price, product.category, product.stock, product.sku, product.createdAt, product.updatedAt]
+            );
+          }
+          
+          await loadProducts();
+        },
+        async () => {
+          const updatedProducts = [...importedProducts, ...products];
+          setProducts(updatedProducts);
+          await saveProductsToStorage(updatedProducts);
         }
-        
-        await loadProducts();
-      } catch (dbError) {
-        console.error('Database import error, using memory storage:', dbError);
-        
-        // Fallback to in-memory update
-        const updatedProducts = [...importedProducts, ...products];
-        setProducts(updatedProducts);
-        await saveProductsToStorage(updatedProducts);
-      }
+      );
       
       showToast && showToast(`${importedProducts.length} products imported successfully!`, 'success');
     } catch (error) {
@@ -1329,7 +1392,8 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
   if (isLoading) {
     return (
       <View style={{ flex: 1, backgroundColor: isDarkMode ? '#1f2937' : '#f3f4f6', justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: isDarkMode ? '#f3f4f6' : '#1f2937', fontSize: 16 }}>
+        <Feather name="loader" size={32} color={isDarkMode ? '#f3f4f6' : '#1f2937'} />
+        <Text style={{ color: isDarkMode ? '#f3f4f6' : '#1f2937', fontSize: 16, marginTop: 12 }}>
           Loading inventory...
         </Text>
       </View>
@@ -1373,14 +1437,14 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
           Manage your products and inventory
         </Text>
         
-        {dbError && (
+        {storageMode === 'storage' && (
           <Text style={{
             color: '#fbbf24',
             fontSize: 12,
             marginTop: 4,
             textAlign: 'center'
           }}>
-            Using offline mode - data saved locally
+            📱 Offline mode - data saved locally
           </Text>
         )}
       </View>
@@ -1542,7 +1606,7 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
         </View>
       )}
 
-      {/* Products List */}
+   {/* Products List */}
       <ScrollView 
         style={{ flex: 1, paddingHorizontal: 16 }}
         contentContainerStyle={{ paddingBottom: 32 }}
@@ -1556,6 +1620,7 @@ const InventoryManagement = ({ showToast, isDarkMode, onUseProduct }) => {
               onDelete={handleDeleteProduct}
               onUse={handleUseProduct}
               isDarkMode={isDarkMode}
+              formatCurrency={formatCurrency}
             />
           ))
         ) : (

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Linking, Alert } from 'react-native';
-import { supabase } from '../utils/supabase';
+import { supabase } from '../utils/supabaseClient';
 import { useNavigation } from 'expo-router';
 
 

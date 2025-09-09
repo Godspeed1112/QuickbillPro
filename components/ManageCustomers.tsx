@@ -4,6 +4,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, Modal, Keyb
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { styles } from 'components/Styles/MainAppStyles';
+import { useCustomers } from '../contexts/CustomerContext';
 import * as Contacts from 'expo-contacts';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -47,21 +48,19 @@ interface ManageCustomersProps {
   showToast: (message: string, type?: string) => void;
   isDarkMode: boolean;
   formatCurrency: (amount: number) => string;
-  onCustomersUpdate?: () => void; // Preferred callback name
-  manageCustomersUpdate?: () => void; // Backward-compatible alias
 }
 
 const ManageCustomers: React.FC<ManageCustomersProps> = ({
   showToast,
   isDarkMode,
-  formatCurrency,
-  onCustomersUpdate // Add this parameter
+  formatCurrency
 }) => {
   // Get screen dimensions and calculate safe area manually
   const { height: screenHeight } = Dimensions.get('window');
   const statusBarHeight = Platform.OS === 'ios' ? (screenHeight >= 812 ? 44 : 20) : StatusBar.currentHeight || 24;
-  
-  const [customers, setCustomers] = useState<Customer[]>([]);
+
+  // Use centralized customer management
+  const { customers, addCustomer: addCustomerToContext, updateCustomer: updateCustomerInContext, deleteCustomer: deleteCustomerFromContext, saveCustomers: saveCustomersToContext } = useCustomers();
   const [salesHistory, setSalesHistory] = useState<Sale[]>([]);
   const [activeTab, setActiveTab] = useState<'customers' | 'sales'>('customers');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -88,21 +87,8 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
   const currentStyles = isDarkMode ? { ...styles, ...darkStyles } : styles;
 
   useEffect(() => {
-    loadCustomers();
     loadSalesHistory();
   }, []);
-
-  const loadCustomers = async () => {
-    try {
-      const stored = await AsyncStorage.getItem('customers');
-      if (stored) {
-        setCustomers(JSON.parse(stored));
-      }
-    } catch (error) {
-      console.error('Error loading customers:', error);
-      showToast('Error loading customers', 'error');
-    }
-  };
 
   const loadSalesHistory = async () => {
     try {
@@ -128,20 +114,6 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
     }
   };
 
-  const saveCustomers = async (updatedCustomers: Customer[]) => {
-    try {
-      await AsyncStorage.setItem('customers', JSON.stringify(updatedCustomers));
-      setCustomers(updatedCustomers);
-
-      // Notify parent component that customers were updated
-      if (onCustomersUpdate) {
-        onCustomersUpdate();
-      }
-    } catch (error) {
-      console.error('Error saving customers:', error);
-      showToast('Error saving customers', 'error');
-    }
-  };
 
   // Request contacts permission
   const requestContactsPermission = async () => {
@@ -308,8 +280,7 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
       }
 
       if (newCustomers.length > 0) {
-        const updatedCustomers = [...customers, ...newCustomers];
-        await saveCustomers(updatedCustomers);
+        await saveCustomersToContext([...customers, ...newCustomers]);
       }
 
       setShowImportModal(false);
@@ -328,7 +299,7 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
     }
   };
 
-  const addCustomer = async () => {
+  const handleAddCustomer = async () => {
     if (!formData.name.trim()) {
       showToast('Please enter customer name', 'error');
       return;
@@ -344,24 +315,35 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
       return;
     }
 
-    const newCustomer: Customer = {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+    console.log('ManageCustomers: Adding customer with data:', {
       name: formData.name.trim(),
       address: formData.address.trim(),
       phone: formData.phone.trim(),
-      email: formData.email.trim(),
-      createdAt: Date.now()
-    };
+      email: formData.email.trim()
+    });
 
-    const updatedCustomers = [...customers, newCustomer];
-    await saveCustomers(updatedCustomers);
+    try {
+      const newCustomer = await addCustomerToContext({
+        name: formData.name.trim(),
+        address: formData.address.trim(),
+        phone: formData.phone.trim(),
+        email: formData.email.trim()
+      });
 
-    resetForm();
-    setShowAddModal(false);
-    showToast('Customer added successfully', 'success');
+      console.log('ManageCustomers: Customer added successfully:', newCustomer);
+      console.log('ManageCustomers: Current customers count after add:', customers.length + 1);
+      console.log('ManageCustomers: All customer names after add:', [...customers, newCustomer].map(c => c.name));
+
+      resetForm();
+      setShowAddModal(false);
+      showToast('Customer added successfully', 'success');
+    } catch (error) {
+      console.error('ManageCustomers: Error adding customer:', error);
+      showToast('Error adding customer', 'error');
+    }
   };
 
-  const editCustomer = async () => {
+  const handleEditCustomer = async () => {
     if (!formData.name.trim() || !selectedCustomer) {
       showToast('Please enter customer name', 'error');
       return;
@@ -378,27 +360,25 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
       return;
     }
 
-    const updatedCustomer: Customer = {
-      ...selectedCustomer,
-      name: formData.name.trim(),
-      address: formData.address.trim(),
-      phone: formData.phone.trim(),
-      email: formData.email.trim(),
-    };
+    try {
+      await updateCustomerInContext(selectedCustomer.id, {
+        name: formData.name.trim(),
+        address: formData.address.trim(),
+        phone: formData.phone.trim(),
+        email: formData.email.trim(),
+      });
 
-    const updatedCustomers = customers.map(customer =>
-      customer.id === selectedCustomer.id ? updatedCustomer : customer
-    );
-
-    await saveCustomers(updatedCustomers);
-
-    resetForm();
-    setShowEditModal(false);
-    setSelectedCustomer(null);
-    showToast('Customer updated successfully', 'success');
+      resetForm();
+      setShowEditModal(false);
+      setSelectedCustomer(null);
+      showToast('Customer updated successfully', 'success');
+    } catch (error) {
+      console.error('Error updating customer:', error);
+      showToast('Error updating customer', 'error');
+    }
   };
 
-  const deleteCustomer = async (customerId: string) => {
+  const handleDeleteCustomer = async (customerId: string) => {
     Alert.alert(
       'Delete Customer',
       'Are you sure you want to delete this customer? This action cannot be undone.',
@@ -408,9 +388,13 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            const updatedCustomers = customers.filter(customer => customer.id !== customerId);
-            await saveCustomers(updatedCustomers);
-            showToast('Customer deleted successfully', 'success');
+            try {
+              await deleteCustomerFromContext(customerId);
+              showToast('Customer deleted successfully', 'success');
+            } catch (error) {
+              console.error('Error deleting customer:', error);
+              showToast('Error deleting customer', 'error');
+            }
           }
         }
       ]
@@ -1173,7 +1157,7 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
                             borderRadius: 6,
                             backgroundColor: '#ef4444'
                           }}
-                          onPress={() => deleteCustomer(customer.id)}
+                          onPress={() => handleDeleteCustomer(customer.id)}
                         >
                           <Feather name="trash-2" size={16} color="white" />
                         </TouchableOpacity>
@@ -1302,7 +1286,7 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
           setShowAddModal(false);
           resetForm();
         }}
-        onSave={addCustomer}
+        onSave={handleAddCustomer}
         title="Add New Customer"
       />
 
@@ -1313,7 +1297,7 @@ const ManageCustomers: React.FC<ManageCustomersProps> = ({
           resetForm();
           setSelectedCustomer(null);
         }}
-        onSave={editCustomer}
+        onSave={handleEditCustomer}
         title="Edit Customer"
       />
 

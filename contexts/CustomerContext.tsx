@@ -36,11 +36,14 @@ export const CustomerProvider: React.FC<CustomerProviderProps> = ({ children }) 
     try {
       setLoading(true);
       const stored = await AsyncStorage.getItem('customers');
+      console.log('CustomerContext: Raw stored data:', stored);
       if (stored) {
         const parsedCustomers: Customer[] = JSON.parse(stored);
         setCustomers(parsedCustomers);
         console.log('CustomerContext: Loaded', parsedCustomers.length, 'customers');
+        console.log('CustomerContext: Customer names:', parsedCustomers.map(c => c.name));
       } else {
+        console.log('CustomerContext: No customers found in storage');
         setCustomers([]);
       }
     } catch (error) {
@@ -64,13 +67,17 @@ export const CustomerProvider: React.FC<CustomerProviderProps> = ({ children }) 
 
   const addCustomer = async (customerData: Omit<Customer, 'id' | 'createdAt'>): Promise<Customer> => {
     try {
+      console.log('CustomerContext: Adding new customer:', customerData);
       const newCustomer: Customer = {
         ...customerData,
         id: Date.now().toString(),
         createdAt: Date.now()
       };
+      console.log('CustomerContext: Created customer object:', newCustomer);
       const updatedCustomers = [...customers, newCustomer];
+      console.log('CustomerContext: Updated customers array length:', updatedCustomers.length);
       await saveCustomers(updatedCustomers);
+      console.log('CustomerContext: Customer added successfully');
       return newCustomer;
     } catch (error) {
       console.error('CustomerContext: Error adding customer:', error);

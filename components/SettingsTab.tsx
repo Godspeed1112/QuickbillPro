@@ -8,6 +8,7 @@ import { useCurrency } from 'components/CurrencyContext';
 
 
 
+
 const saveCompanyEmail = async (email: string) => {
   try {
     await AsyncStorage.setItem("companyEmail", email);
@@ -29,14 +30,155 @@ const loadCompanyEmail = async (): Promise<string | null> => {
 
 const { width } = Dimensions.get('window');
 
-// Currency options
+// Comprehensive Currency options - matches MainApp.tsx and printPdf.tsx
 const CURRENCIES = [
-  { code: 'GHC', symbol: '₵', name: 'Ghana Cedi' },
   { code: 'USD', symbol: '$', name: 'US Dollar' },
   { code: 'EUR', symbol: '€', name: 'Euro' },
   { code: 'GBP', symbol: '£', name: 'British Pound' },
+  { code: 'JPY', symbol: '¥', name: 'Japanese Yen' },
+  { code: 'CNY', symbol: '¥', name: 'Chinese Yuan' },
+  { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
+  { code: 'KES', symbol: 'KSh', name: 'Kenyan Shilling' },
   { code: 'NGN', symbol: '₦', name: 'Nigerian Naira' },
-  { code: 'ZAR', symbol: 'R', name: 'South African Rand' }
+  { code: 'ZAR', symbol: 'R', name: 'South African Rand' },
+  { code: 'GHC', symbol: '₵', name: 'Ghana Cedi' },
+  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar' },
+  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar' },
+  { code: 'CHF', symbol: 'Fr', name: 'Swiss Franc' },
+  { code: 'SEK', symbol: 'kr', name: 'Swedish Krona' },
+  { code: 'NOK', symbol: 'kr', name: 'Norwegian Krone' },
+  { code: 'DKK', symbol: 'kr', name: 'Danish Krone' },
+  { code: 'BRL', symbol: 'R$', name: 'Brazilian Real' },
+  { code: 'MXN', symbol: '$', name: 'Mexican Peso' },
+  { code: 'ARS', symbol: '$', name: 'Argentine Peso' },
+  { code: 'CLP', symbol: '$', name: 'Chilean Peso' },
+  { code: 'COP', symbol: '$', name: 'Colombian Peso' },
+  { code: 'PEN', symbol: 'S/', name: 'Peruvian Sol' },
+  { code: 'UYU', symbol: '$U', name: 'Uruguayan Peso' },
+  { code: 'PYG', symbol: '₲', name: 'Paraguayan Guarani' },
+  { code: 'BOB', symbol: 'Bs.', name: 'Bolivian Boliviano' },
+  { code: 'VEF', symbol: 'Bs.', name: 'Venezuelan Bolivar' },
+  { code: 'EGP', symbol: '£', name: 'Egyptian Pound' },
+  { code: 'MAD', symbol: 'د.م.', name: 'Moroccan Dirham' },
+  { code: 'ZMW', symbol: 'ZK', name: 'Zambian Kwacha' },
+  { code: 'TZS', symbol: 'TSh', name: 'Tanzanian Shilling' },
+  { code: 'UGX', symbol: 'USh', name: 'Ugandan Shilling' },
+  { code: 'RWF', symbol: 'FRw', name: 'Rwandan Franc' },
+  { code: 'BIF', symbol: 'FBu', name: 'Burundian Franc' },
+  { code: 'ETB', symbol: 'Br', name: 'Ethiopian Birr' },
+  { code: 'DJF', symbol: 'Fdj', name: 'Djiboutian Franc' },
+  { code: 'SOS', symbol: 'S', name: 'Somali Shilling' },
+  { code: 'SSP', symbol: '£', name: 'South Sudanese Pound' },
+  { code: 'SZL', symbol: 'E', name: 'Swazi Lilangeni' },
+  { code: 'LSL', symbol: 'M', name: 'Lesotho Loti' },
+  { code: 'MWK', symbol: 'MK', name: 'Malawian Kwacha' },
+  { code: 'MZN', symbol: 'MT', name: 'Mozambican Metical' },
+  { code: 'AOA', symbol: 'Kz', name: 'Angolan Kwanza' },
+  { code: 'CDF', symbol: 'FC', name: 'Congolese Franc' },
+  { code: 'XAF', symbol: 'FCFA', name: 'Central African CFA Franc' },
+  { code: 'XOF', symbol: 'CFA', name: 'West African CFA Franc' },
+  { code: 'CVE', symbol: '$', name: 'Cape Verdean Escudo' },
+  { code: 'STN', symbol: 'Db', name: 'São Tomé and Príncipe Dobra' },
+  { code: 'GMD', symbol: 'D', name: 'Gambian Dalasi' },
+  { code: 'GNF', symbol: 'FG', name: 'Guinean Franc' },
+  { code: 'LRD', symbol: '$', name: 'Liberian Dollar' },
+  { code: 'SLL', symbol: 'Le', name: 'Sierra Leonean Leone' },
+  { code: 'SCR', symbol: '₨', name: 'Seychellois Rupee' },
+  { code: 'MUR', symbol: '₨', name: 'Mauritian Rupee' },
+  { code: 'MGA', symbol: 'Ar', name: 'Malagasy Ariary' },
+  { code: 'KMF', symbol: 'CF', name: 'Comorian Franc' },
+  { code: 'TND', symbol: 'د.ت', name: 'Tunisian Dinar' },
+  { code: 'DZD', symbol: 'د.ج', name: 'Algerian Dinar' },
+  { code: 'LYD', symbol: 'ل.د', name: 'Libyan Dinar' },
+  { code: 'SDG', symbol: '£', name: 'Sudanese Pound' },
+  { code: 'JOD', symbol: 'د.أ', name: 'Jordanian Dinar' },
+  { code: 'IQD', symbol: 'ع.د', name: 'Iraqi Dinar' },
+  { code: 'BHD', symbol: '.د.ب', name: 'Bahraini Dinar' },
+  { code: 'KWD', symbol: 'د.ك', name: 'Kuwaiti Dinar' },
+  { code: 'SAR', symbol: '﷼', name: 'Saudi Riyal' },
+  { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham' },
+  { code: 'OMR', symbol: '﷼', name: 'Omani Rial' },
+  { code: 'QAR', symbol: '﷼', name: 'Qatari Riyal' },
+  { code: 'YER', symbol: '﷼', name: 'Yemeni Rial' },
+  { code: 'IRR', symbol: '﷼', name: 'Iranian Rial' },
+  { code: 'AFN', symbol: '؋', name: 'Afghan Afghani' },
+  { code: 'PKR', symbol: '₨', name: 'Pakistani Rupee' },
+  { code: 'BDT', symbol: '৳', name: 'Bangladeshi Taka' },
+  { code: 'LKR', symbol: '₨', name: 'Sri Lankan Rupee' },
+  { code: 'NPR', symbol: '₨', name: 'Nepalese Rupee' },
+  { code: 'BTN', symbol: 'Nu.', name: 'Bhutanese Ngultrum' },
+  { code: 'MMK', symbol: 'K', name: 'Myanmar Kyat' },
+  { code: 'LAK', symbol: '₭', name: 'Laotian Kip' },
+  { code: 'KHR', symbol: '៛', name: 'Cambodian Riel' },
+  { code: 'VND', symbol: '₫', name: 'Vietnamese Dong' },
+  { code: 'THB', symbol: '฿', name: 'Thai Baht' },
+  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar' },
+  { code: 'MYR', symbol: 'RM', name: 'Malaysian Ringgit' },
+  { code: 'IDR', symbol: 'Rp', name: 'Indonesian Rupiah' },
+  { code: 'PHP', symbol: '₱', name: 'Philippine Peso' },
+  { code: 'BND', symbol: 'B$', name: 'Brunei Dollar' },
+  { code: 'HKD', symbol: 'HK$', name: 'Hong Kong Dollar' },
+  { code: 'TWD', symbol: 'NT$', name: 'New Taiwan Dollar' },
+  { code: 'KRW', symbol: '₩', name: 'South Korean Won' },
+  { code: 'KPW', symbol: '₩', name: 'North Korean Won' },
+  { code: 'MNT', symbol: '₮', name: 'Mongolian Tugrik' },
+  { code: 'RUB', symbol: '₽', name: 'Russian Ruble' },
+  { code: 'UAH', symbol: '₴', name: 'Ukrainian Hryvnia' },
+  { code: 'BYN', symbol: 'Br', name: 'Belarusian Ruble' },
+  { code: 'PLN', symbol: 'zł', name: 'Polish Zloty' },
+  { code: 'CZK', symbol: 'Kč', name: 'Czech Koruna' },
+  { code: 'HUF', symbol: 'Ft', name: 'Hungarian Forint' },
+  { code: 'RON', symbol: 'lei', name: 'Romanian Leu' },
+  { code: 'BGN', symbol: 'лв', name: 'Bulgarian Lev' },
+  { code: 'HRK', symbol: 'kn', name: 'Croatian Kuna' },
+  { code: 'RSD', symbol: 'дин.', name: 'Serbian Dinar' },
+  { code: 'MKD', symbol: 'ден', name: 'Macedonian Denar' },
+  { code: 'ALL', symbol: 'L', name: 'Albanian Lek' },
+  { code: 'BAM', symbol: 'KM', name: 'Bosnia-Herzegovina Convertible Mark' },
+  { code: 'ISK', symbol: 'kr', name: 'Icelandic Krona' },
+  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
+  { code: 'AZN', symbol: '₼', name: 'Azerbaijani Manat' },
+  { code: 'GEL', symbol: '₾', name: 'Georgian Lari' },
+  { code: 'AMD', symbol: '֏', name: 'Armenian Dram' },
+  { code: 'KZT', symbol: '₸', name: 'Kazakhstani Tenge' },
+  { code: 'KGS', symbol: 'сом', name: 'Kyrgyzstani Som' },
+  { code: 'TJS', symbol: 'ЅМ', name: 'Tajikistani Somoni' },
+  { code: 'TMT', symbol: 'T', name: 'Turkmenistani Manat' },
+  { code: 'UZS', symbol: 'so\'m', name: 'Uzbekistani Som' },
+  { code: 'NZD', symbol: 'NZ$', name: 'New Zealand Dollar' },
+  { code: 'FJD', symbol: 'FJ$', name: 'Fijian Dollar' },
+  { code: 'PGK', symbol: 'K', name: 'Papua New Guinean Kina' },
+  { code: 'SBD', symbol: 'SI$', name: 'Solomon Islands Dollar' },
+  { code: 'TOP', symbol: 'T$', name: 'Tongan Pa\'anga' },
+  { code: 'WST', symbol: 'WS$', name: 'Samoan Tala' },
+  { code: 'VUV', symbol: 'VT', name: 'Vanuatu Vatu' },
+  { code: 'XPF', symbol: '₣', name: 'CFP Franc' },
+  { code: 'ANG', symbol: 'ƒ', name: 'Netherlands Antillean Guilder' },
+  { code: 'AWG', symbol: 'ƒ', name: 'Aruban Florin' },
+  { code: 'BBD', symbol: '$', name: 'Barbadian Dollar' },
+  { code: 'BMD', symbol: '$', name: 'Bermudian Dollar' },
+  { code: 'BSD', symbol: '$', name: 'Bahamian Dollar' },
+  { code: 'BZD', symbol: 'BZ$', name: 'Belize Dollar' },
+  { code: 'CUC', symbol: '$', name: 'Cuban Convertible Peso' },
+  { code: 'CUP', symbol: '₱', name: 'Cuban Peso' },
+  { code: 'DOP', symbol: 'RD$', name: 'Dominican Peso' },
+  { code: 'FKP', symbol: '£', name: 'Falkland Islands Pound' },
+  { code: 'GIP', symbol: '£', name: 'Gibraltar Pound' },
+  { code: 'GYD', symbol: '$', name: 'Guyanese Dollar' },
+  { code: 'HTG', symbol: 'G', name: 'Haitian Gourde' },
+  { code: 'JMD', symbol: 'J$', name: 'Jamaican Dollar' },
+  { code: 'KYD', symbol: '$', name: 'Cayman Islands Dollar' },
+  { code: 'SHP', symbol: '£', name: 'Saint Helena Pound' },
+  { code: 'SRD', symbol: '$', name: 'Surinamese Dollar' },
+  { code: 'TTD', symbol: 'TT$', name: 'Trinidad and Tobago Dollar' },
+  { code: 'TVD', symbol: '$', name: 'Tuvaluan Dollar' },
+  { code: 'XCD', symbol: '$', name: 'East Caribbean Dollar' },
+  { code: 'SVC', symbol: '$', name: 'Salvadoran Colón' },
+  { code: 'NIO', symbol: 'C$', name: 'Nicaraguan Córdoba' },
+  { code: 'CRC', symbol: '₡', name: 'Costa Rican Colón' },
+  { code: 'PAB', symbol: 'B/.', name: 'Panamanian Balboa' },
+  { code: 'HNL', symbol: 'L', name: 'Honduran Lempira' },
+  { code: 'GTQ', symbol: 'Q', name: 'Guatemalan Quetzal' }
 ];
 
 const SettingsTab = ({ 
@@ -295,6 +437,21 @@ useEffect(() => {
             </View>
           </View>
 
+          <View style={currentStyles.inputGroup}>
+            <Text style={currentStyles.label}>Discount Rate</Text>
+            <View style={currentStyles.inputContainer}>
+              <Feather name="percent" size={16} color={localSettings.darkMode ? '#9CA3AF' : '#6B7280'} style={currentStyles.inputIcon} />
+              <TextInput
+                style={currentStyles.input}
+                value={localSettings.defaultDiscountRate}
+                onChangeText={(text) => handleTextChange('defaultDiscountRate', text)}
+                placeholder="Enter Discount Rate (e.g., 5 for 5%)"
+                placeholderTextColor={localSettings.darkMode ? '#9CA3AF' : '#6B7280'}
+                autoCapitalize="none"
+              />
+            </View>
+          </View>
+
           <TouchableOpacity
             style={[currentStyles.saveButton, { opacity: isSaving ? 0.7 : 1 }]}
             onPress={handleManualSave}
@@ -426,12 +583,12 @@ useEffect(() => {
             <View style={currentStyles.appInfoContent}>
               <View style={currentStyles.appInfoRow}>
                 <Text style={currentStyles.appInfoLabel}>QuickbillPro</Text>
-                <Text style={currentStyles.appInfoValue}>V 1.0.0 (Beta)</Text>
+                <Text style={currentStyles.appInfoValue}>V 1.1.0 (Beta)</Text>
               </View>
               
               <View style={currentStyles.appInfoRow}>
                 <Text style={currentStyles.appInfoLabel}>Build Date</Text>
-                <Text style={currentStyles.appInfoValue}>July 2025</Text>
+                <Text style={currentStyles.appInfoValue}>September 2025</Text>
               </View>
               
               <View style={currentStyles.appInfoRow}>

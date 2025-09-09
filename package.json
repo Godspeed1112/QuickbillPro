@@ -27,7 +27,8 @@
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-navigation/native": "^7.1.14",
     "@react-navigation/stack": "^7.4.2",
-    "@supabase/supabase-js": "^2.54.0",
+    "@supabase/realtime-js": "^2.15.2",
+    "@supabase/supabase-js": "^2.55.0",
     "@types/papaparse": "^5.3.16",
     "@types/react-native": "^0.72.8",
     "crypto-js": "^4.2.0",
@@ -39,6 +40,7 @@
     "expo-document-picker": "~13.1.6",
     "expo-file-system": "~18.1.11",
     "expo-image-picker": "~16.1.4",
+    "expo-mail-composer": "~14.1.5",
     "expo-media-library": "~17.1.7",
     "expo-print": "~14.1.4",
     "expo-router": "~5.1.4",
@@ -59,8 +61,7 @@
     "react-native-screens": "~4.11.1",
     "react-native-uuid": "^2.0.3",
     "react-native-vector-icons": "^10.2.0",
-    "react-native-web": "^0.20.0",
-    "expo-mail-composer": "~14.1.5"
+    "react-native-web": "^0.20.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
